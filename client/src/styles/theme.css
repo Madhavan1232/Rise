@@ -1,0 +1,58 @@
+/* ============================================================
+   RISE — Light Theme Tokens  (WHITE + BLUE)
+   All colors defined here. No hardcoded colors in components.
+   ============================================================ */
+
+:root {
+  /* ── Backgrounds ─────────────────────────────────────────── */
+  --bg-primary:   #ffffff;
+  --bg-secondary: #f6f8fc;
+  --bg-card:      #ffffff;
+  --bg-hover:     #eef4ff;
+
+  /* ── Borders ──────────────────────────────────────────────── */
+  --border:       #e4e9f2;
+
+  /* ── Text ─────────────────────────────────────────────────── */
+  --text-primary:   #0b1b3a;
+  --text-secondary: #5b6b86;
+
+  /* ── Blue Palette ─────────────────────────────────────────── */
+  --blue-50:  #eef4ff;
+  --blue-100: #dce8ff;
+  --blue-500: #2563eb;
+  --blue-600: #1d4ed8;
+  --blue-700: #1e40af;
+
+  /* ── Dark Navy ────────────────────────────────────────────── */
+  --navy:     #0b1b3a;
+
+  /* ── Shadows ──────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(11, 27, 58, 0.06);
+  --shadow-md: 0 8px 24px rgba(11, 27, 58, 0.08);
+  --shadow-lg: 0 20px 48px rgba(37, 99, 235, 0.14);
+
+  /* ── Typography ───────────────────────────────────────────── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* ── Radii ────────────────────────────────────────────────── */
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
+  --radius-pill: 999px;
+
+  /* ── Motion ───────────────────────────────────────────────── */
+  --ease-out:      cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+  --duration-slow: 400ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}
