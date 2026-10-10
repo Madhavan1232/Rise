@@ -23,6 +23,7 @@ import SearchOutlined from '@mui/icons-material/SearchOutlined';
 import { MetalButton } from '@/components/ui/metal-button';
 import { AUDIENCE_TABS, NAV_ITEMS } from '../data/navData';
 import { useAuth } from '../context/AuthContext';
+import UserButton from './UserButton';
 import '../styles/Navbar.css';
 
 // Map icon name strings → Material UI Outlined components
@@ -207,9 +208,6 @@ export default function Navbar() {
     }
   };
 
-  const initials = user
-    ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
-    : '';
 
   return (
     <header>
@@ -241,93 +239,99 @@ export default function Navbar() {
         aria-label="Main navigation"
       >
         <div className="navbar__inner">
-          {/* Logo */}
-          <Link to="/" className="navbar__logo" aria-label="Rise home">
-            <img src="/rise_logo.svg" alt="Rise" />
-          </Link>
+          {/* Left Side: Logo & Navigation Links */}
+          <div className="navbar__left">
+            {/* Brand Logo */}
+            <Link to="/" className="navbar__logo" aria-label="Rise home">
+              <img src="/rise_logo.svg" alt="Rise" />
+            </Link>
 
-          {/* Desktop links */}
-          <ul className="navbar__links" role="list">
-            {NAV_ITEMS.map((item, i) => (
-              <li key={item.label}>
-                {item.dropdown || item.mega ? (
-                  <NavDropdown
-                    item={item}
-                    open={openMenu === i}
-                    onOpen={() => setOpenMenu(i)}
-                    onClose={() => setOpenMenu(null)}
-                  />
-                ) : (
-                  <a href={item.href || '#'} className="navbar__link">
-                    {item.label}
-                  </a>
-                )}
-              </li>
-            ))}
-          </ul>
-
-          {/* Compact search bar */}
-          <form className="navbar__search" onSubmit={handleSearch} role="search">
-            <input
-              type="text"
-              className="navbar__search-input"
-              placeholder="What do you want to learn?"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              aria-label="What do you want to learn?"
-            />
-            <button type="submit" className="navbar__search-btn" aria-label="Search">
-              <SearchOutlined style={{ fontSize: 18 }} />
-            </button>
-          </form>
-
-          {/* Auth */}
-          <div className="navbar__auth">
-            {user ? (
-              <div className="navbar__user">
-                <div className="navbar__avatar" aria-hidden="true">{initials}</div>
-                <span className="navbar__username">{user.name}</span>
-                <button className="btn-logout" onClick={logout}>Log out</button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <MetalButton
-                  variant="default"
-                  type="button"
-                  preset="silver"
-                  disableGlow
-                  paused={reducedMotion}
-                  onClick={() => navigate('/login')}
-                  metalFxClassName="rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
-                  className="font-medium text-sm px-4 min-w-[78px] h-9 rounded-lg text-[#09090b]! cursor-pointer justify-center"
-                >
-                  Log in
-                </MetalButton>
-                <MetalButton
-                  variant="default"
-                  type="button"
-                  preset="silver"
-                  disableGlow
-                  paused={reducedMotion}
-                  onClick={() => navigate('/signup')}
-                  metalFxClassName="rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
-                  className="font-semibold text-sm px-4.5 min-w-[86px] h-9 rounded-lg text-[#09090b]! cursor-pointer justify-center"
-                >
-                  Sign up
-                </MetalButton>
-              </div>
-            )}
+            {/* Desktop links */}
+            <ul className="navbar__links" role="list">
+              {NAV_ITEMS.map((item, i) => (
+                <li key={item.label}>
+                  {item.dropdown || item.mega ? (
+                    <NavDropdown
+                      item={item}
+                      open={openMenu === i}
+                      onOpen={() => setOpenMenu(i)}
+                      onClose={() => setOpenMenu(null)}
+                    />
+                  ) : (
+                    <a href={item.href || '#'} className="navbar__link">
+                      {item.label}
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
           </div>
 
-          {/* Hamburger */}
-          <button
-            className={`navbar__hamburger${mobileOpen ? ' open' : ''}`}
-            onClick={() => setMobileOpen(!mobileOpen)}
-            aria-label="Toggle mobile menu"
-            aria-expanded={mobileOpen}
-          >
-            <span /><span /><span />
-          </button>
+          {/* Right Side: Search Bar & User Avatar */}
+          <div className="navbar__right">
+            {/* Search Input */}
+            <form className="navbar__search" onSubmit={handleSearch} role="search">
+              <input
+                type="text"
+                className="navbar__search-input"
+                placeholder="What do you want to learn?"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label="What do you want to learn?"
+              />
+              <button type="submit" className="navbar__search-btn" aria-label="Search">
+                <SearchOutlined style={{ fontSize: 18 }} />
+              </button>
+            </form>
+
+            {/* Auth / Avatar Button */}
+            <div className="navbar__auth">
+              {user ? (
+                <UserButton
+                  user={user}
+                  onSignOut={logout}
+                  onSettings={() => navigate('/settings')}
+                />
+              ) : (
+                <div className="flex items-center gap-3">
+                  <MetalButton
+                    variant="default"
+                    type="button"
+                    preset="silver"
+                    disableGlow
+                    paused={reducedMotion}
+                    onClick={() => navigate('/login')}
+                    metalFxClassName="rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
+                    className="font-medium text-sm px-4 min-w-[78px] h-9 rounded-lg text-[#09090b]! cursor-pointer justify-center"
+                  >
+                    Log in
+                  </MetalButton>
+                  <MetalButton
+                    variant="default"
+                    type="button"
+                    preset="silver"
+                    disableGlow
+                    paused={reducedMotion}
+                    onClick={() => navigate('/signup')}
+                    metalFxClassName="rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
+                    className="font-semibold text-sm px-4.5 min-w-[86px] h-9 rounded-lg text-[#09090b]! cursor-pointer justify-center"
+                  >
+                    Sign up
+                  </MetalButton>
+                </div>
+              )}
+            </div>
+
+            {/* Hamburger (Mobile) */}
+            <button
+              className={`navbar__hamburger${mobileOpen ? ' open' : ''}`}
+              onClick={() => setMobileOpen(!mobileOpen)}
+              aria-label="Toggle mobile menu"
+              aria-expanded={mobileOpen}
+            >
+              <span /><span /><span />
+            </button>
+          </div>
         </div>
 
         {/* Mobile drawer */}
