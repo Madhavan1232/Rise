@@ -59,6 +59,10 @@ async function seedDatabase() {
         expires_at TIMESTAMP NOT NULL,
         attempts INT DEFAULT 0,
         purpose VARCHAR(32) DEFAULT 'auth',
+        oauth_provider VARCHAR(32) NULL,
+        oauth_id VARCHAR(128) NULL,
+        name VARCHAR(255) NULL,
+        avatar_url VARCHAR(512) NULL,
         last_sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         username VARCHAR(64) NULL
@@ -112,13 +116,6 @@ async function seedDatabase() {
     console.log('🌱 Seeding sample passwordless accounts and course enrollments...');
     const seedUsers = [
       {
-        name: 'Madhavan Vairavan',
-        username: 'madhavan',
-        email: 'madhavanvairavan3@gmail.com',
-        auth_provider: 'email_otp',
-        avatar_url: null,
-      },
-      {
         name: 'Demo Learner',
         username: 'demo',
         email: 'demo@rise.dev',
@@ -142,7 +139,6 @@ async function seedDatabase() {
     }
 
     console.log('✅ Seed data inserted successfully:');
-    console.log('   👤 madhavanvairavan3@gmail.com (Passwordless: Email OTP & Google OAuth)');
     console.log('   👤 demo@rise.dev (Passwordless: Email OTP)');
     console.log('\n🎉 Database reset & seeding completed successfully!');
   } catch (err) {

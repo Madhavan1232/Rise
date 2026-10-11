@@ -62,6 +62,10 @@ const startServer = async () => {
     try { await connection.execute('ALTER TABLE signup_otps MODIFY COLUMN password_hash VARCHAR(255) NULL'); } catch (_) {}
     try { await connection.execute('ALTER TABLE signup_otps ADD COLUMN username VARCHAR(64) NULL'); } catch (_) {}
     try { await connection.execute("ALTER TABLE signup_otps ADD COLUMN purpose VARCHAR(32) DEFAULT 'auth'"); } catch (_) {}
+    try { await connection.execute('ALTER TABLE signup_otps ADD COLUMN oauth_provider VARCHAR(32) NULL'); } catch (_) {}
+    try { await connection.execute('ALTER TABLE signup_otps ADD COLUMN oauth_id VARCHAR(128) NULL'); } catch (_) {}
+    try { await connection.execute('ALTER TABLE signup_otps ADD COLUMN name VARCHAR(255) NULL'); } catch (_) {}
+    try { await connection.execute('ALTER TABLE signup_otps ADD COLUMN avatar_url VARCHAR(512) NULL'); } catch (_) {}
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS oauth_pending_links (
         id INT AUTO_INCREMENT PRIMARY KEY,

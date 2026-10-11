@@ -45,13 +45,17 @@ async function migrate() {
       if (!e.message.includes("check that column/key exists")) console.log('signup_otps.password_hash cleanup:', e.message);
     }
 
-    // 6. Ensure signup_otps purpose column exists
+    // 6. Ensure signup_otps purpose and OAuth columns exist
     try {
       await c.execute("ALTER TABLE signup_otps ADD COLUMN purpose VARCHAR(32) DEFAULT 'auth'");
       console.log('✅ Added signup_otps.purpose');
     } catch (e) {
       if (!e.message.includes('Duplicate column')) console.log('signup_otps.purpose:', e.message);
     }
+    try { await c.execute('ALTER TABLE signup_otps ADD COLUMN oauth_provider VARCHAR(32) NULL'); } catch (_) {}
+    try { await c.execute('ALTER TABLE signup_otps ADD COLUMN oauth_id VARCHAR(128) NULL'); } catch (_) {}
+    try { await c.execute('ALTER TABLE signup_otps ADD COLUMN name VARCHAR(255) NULL'); } catch (_) {}
+    try { await c.execute('ALTER TABLE signup_otps ADD COLUMN avatar_url VARCHAR(512) NULL'); } catch (_) {}
 
     // 7. Ensure oauth_pending_links table exists
     await c.execute(`

@@ -1,7 +1,7 @@
 // client/src/components/auth/PasswordlessAuthCard.jsx
 import React, { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Info } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import api from "../../api";
 import "../../styles/SignupMotion.css";
@@ -124,7 +124,7 @@ function OTPInput({ length = 6, value, onChange, autoFocus, disabled }) {
   );
 }
 
-export default function PasswordlessAuthCard({ mode = "login", onSuccess, redirectTo = "/" }) {
+export default function PasswordlessAuthCard({ mode = "login", infoMessage: propInfoMessage, onSuccess, redirectTo = "/" }) {
   const [step, setStep] = useState("email"); // "email" | "otp"
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
@@ -144,6 +144,9 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
   const location = useLocation();
   const authHandledRef = useRef(false);
 
+  // Read message from router state or query param
+  const infoMessage = propInfoMessage || location.state?.message || new URLSearchParams(location.search).get("message");
+
   const isAnyLoading = loading || Boolean(oauthLoading);
 
   // ── 1. Check URL parameters for OAuth redirects, notices, or linking ──
@@ -156,6 +159,9 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
     const providerParam = params.get("provider");
     const linkEmail = params.get("email");
     const linkTokenParam = params.get("link_token");
+    const statusParam = params.get("status");
+    const otpRequiredParam = params.get("otp_required");
+    const devOtpParam = params.get("dev_otp");
 
     // Handle OAuth success token
     if (tokenParam && !authHandledRef.current) {
@@ -201,6 +207,20 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
       setNotice(decodeURIComponent(noticeParam));
     }
 
+    // Handle Google/GitHub OAuth OTP requirement (Bugs 1 & 2)
+    if ((statusParam === "otp_required" || otpRequiredParam === "1") && linkEmail) {
+      const decodedEmail = decodeURIComponent(linkEmail);
+      setEmail(decodedEmail);
+      setStep("otp");
+      setCooldown(30);
+      setLinkToken("");
+      if (devOtpParam) {
+        setNotice(`Verification code (dev): ${devOtpParam}`);
+      } else {
+        setNotice(`A verification code was sent to ${decodedEmail}`);
+      }
+    }
+
     // Handle pending OAuth account linking prompt
     if (linkPending === "1" && linkTokenParam && linkEmail) {
       setEmail(decodeURIComponent(linkEmail));
@@ -208,9 +228,9 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
       setLinkProvider(providerParam ? decodeURIComponent(providerParam) : "account");
       setCooldown(30);
       setStep("otp");
-      const devOtpParam = params.get("dev_otp");
-      if (devOtpParam) {
-        setNotice(`Gmail SMTP daily limit reached. Development OTP: ${devOtpParam}`);
+      const devOtp = params.get("dev_otp");
+      if (devOtp) {
+        setNotice(`Gmail SMTP daily limit reached. Development OTP: ${devOtp}`);
       }
     }
   }, [location.search, navigate, login, onSuccess, redirectTo]);
@@ -262,7 +282,7 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-      const { data } = await api.post("/auth/request-otp", { email: cleanEmail });
+      const { data } = await api.post("/auth/request-otp", { email: cleanEmail, mode });
       setStep("otp");
       setOtp("");
       setCooldown(data?.cooldown || 30);
@@ -270,10 +290,18 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
         setNotice(data.notice);
       }
     } catch (err) {
+      if (err.response?.status === 409) {
+        navigate('/login', {
+          state: { message: 'You already have an account. Log in here.' }
+        });
+        return;
+      }
       const remaining = err.response?.data?.cooldownRemaining;
       if (remaining && remaining > 0) {
         setCooldown(remaining);
         setStep("otp");
+      } else if (err.response?.status === 404) {
+        setServerError(err.response?.data?.message || "No account found. Please sign up to create an account.");
       } else {
         setServerError(err.response?.data?.message || "Failed to send verification code. Please try again.");
       }
@@ -362,13 +390,28 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
     const apiBase = import.meta.env?.VITE_API_URL || "http://localhost:5000/api";
 
     if (typeof window !== "undefined" && window.__MOCK_OAUTH_REDIRECT__) {
-      window.__MOCK_OAUTH_REDIRECT__("google");
+      try {
+        window.__MOCK_OAUTH_REDIRECT__("google");
+      } catch (error) {
+        if (error?.response?.status === 409) {
+          navigate('/login', {
+            state: { message: 'You already have an account. Log in here.' }
+          });
+          return;
+        }
+      }
       return;
     }
 
     try {
-      window.location.href = `${apiBase}/auth/google`;
-    } catch {
+      window.location.href = `${apiBase}/auth/google?mode=${mode}`;
+    } catch (error) {
+      if (error?.response?.status === 409) {
+        navigate('/login', {
+          state: { message: 'You already have an account. Log in here.' }
+        });
+        return;
+      }
       setOauthLoading(null);
       setServerError("Unable to connect to Google. Please try again.");
     }
@@ -380,6 +423,14 @@ export default function PasswordlessAuthCard({ mode = "login", onSuccess, redire
         <>
           <h1 className="auth__card-title">Continue with email</h1>
           <p className="auth__card-description">Enter your email to receive a one-time verification code.</p>
+
+          {/* Info banner for returning user nudge */}
+          {infoMessage && (
+            <div className="info-banner" role="status">
+              <Info size={16} aria-hidden="true" />
+              <span>{infoMessage}</span>
+            </div>
+          )}
 
           {/* Reserved alert slot */}
           <div className="auth__alert-slot" data-testid="auth-alert-slot" aria-live="polite">

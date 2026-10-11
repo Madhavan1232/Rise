@@ -88,8 +88,8 @@ function validateUsername(username) {
 // ─────────────────────────────────────────────────────────────
 // 1. Passwordless Email OTP: Request OTP (both /signup & /login)
 // ─────────────────────────────────────────────────────────────
-router.post(['/request-otp', '/signup/request-otp'], async (req, res) => {
-  const { email } = req.body;
+router.post(['/request-otp', '/signup/request-otp', '/login/request-otp'], async (req, res) => {
+  const { email, mode } = req.body;
 
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ message: 'A valid email address is required.' });
@@ -99,7 +99,38 @@ router.post(['/request-otp', '/signup/request-otp'], async (req, res) => {
     return res.status(400).json({ message: 'Please enter a valid email address.' });
   }
 
+  const isLoginMode = mode === 'login' || req.path.includes('/login');
+  const isSignupMode = mode === 'signup' || req.path.includes('/signup');
+
   try {
+    // If mode is login, verify user exists in DB before sending OTP
+    if (isLoginMode) {
+      const [existingUsers] = await db.execute(
+        'SELECT id FROM users WHERE email = ? LIMIT 1',
+        [cleanEmail]
+      );
+      if (existingUsers.length === 0) {
+        return res.status(404).json({
+          status: 404,
+          message: 'No account found. Please sign up to create an account.',
+        });
+      }
+    }
+
+    // If mode is signup, return 409 if user already has an account
+    if (isSignupMode) {
+      const [existingUsers] = await db.execute(
+        'SELECT id FROM users WHERE email = ? LIMIT 1',
+        [cleanEmail]
+      );
+      if (existingUsers.length > 0) {
+        return res.status(409).json({
+          status: 409,
+          message: 'You already have an account. Log in here.',
+        });
+      }
+    }
+
     // Check rate limit / cooldown from existing pending OTP
     const [pendingRows] = await db.execute(
       'SELECT id, UNIX_TIMESTAMP(last_sent_at) as last_sent_ts FROM signup_otps WHERE email = ? LIMIT 1',
@@ -131,6 +162,8 @@ router.post(['/request-otp', '/signup/request-otp'], async (req, res) => {
          expires_at = VALUES(expires_at),
          attempts = 0,
          purpose = 'auth',
+         oauth_provider = NULL,
+         oauth_id = NULL,
          last_sent_at = NOW()`,
       [cleanEmail, otpHash, expiresAt]
     );
@@ -185,7 +218,8 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
 
   try {
     const [rows] = await db.execute(
-      `SELECT id, otp_hash, attempts, UNIX_TIMESTAMP(expires_at) as expires_ts
+      `SELECT id, otp_hash, attempts, purpose, username, oauth_provider, oauth_id, name, avatar_url,
+              UNIX_TIMESTAMP(expires_at) as expires_ts
        FROM signup_otps WHERE email = ? LIMIT 1`,
       [cleanEmail]
     );
@@ -226,7 +260,7 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
 
     // Check if user already exists
     const [existingUsers] = await db.execute(
-      'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, username, name, email, auth_provider, avatar_url, google_id, github_id FROM users WHERE email = ? LIMIT 1',
       [cleanEmail]
     );
 
@@ -238,6 +272,26 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
       // ── EXISTING USER: Preserves existing progress, enrollments & settings ──
       const user = existingUsers[0];
       userId = user.id;
+
+      // If verified as part of Google/GitHub OAuth, link identity & update profile
+      if (record.oauth_provider === 'google') {
+        const updateAvatar = !user.avatar_url && record.avatar_url ? record.avatar_url : user.avatar_url;
+        await db.execute(
+          'UPDATE users SET google_id = COALESCE(google_id, ?), avatar_url = COALESCE(avatar_url, ?), name = COALESCE(NULLIF(name, ""), ?) WHERE id = ?',
+          [record.oauth_id, record.avatar_url, record.name || null, user.id]
+        );
+        user.avatar_url = updateAvatar;
+        user.name = user.name || record.name || '';
+      } else if (record.oauth_provider === 'github') {
+        const updateAvatar = !user.avatar_url && record.avatar_url ? record.avatar_url : user.avatar_url;
+        await db.execute(
+          'UPDATE users SET github_id = COALESCE(github_id, ?), avatar_url = COALESCE(avatar_url, ?), name = COALESCE(NULLIF(name, ""), ?) WHERE id = ?',
+          [record.oauth_id, record.avatar_url, record.name || null, user.id]
+        );
+        user.avatar_url = updateAvatar;
+        user.name = user.name || record.name || '';
+      }
+
       userObj = {
         id: user.id,
         username: user.username || '',
@@ -246,28 +300,34 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
         avatarUrl: user.avatar_url || null,
       };
     } else {
-      // ── NEW USER: Automatically created passwordlessly ──
+      // ── NEW USER: Created only AFTER OTP verification ──
       isNewUser = true;
+      const provider = record.oauth_provider || 'email_otp';
+      const googleId = record.oauth_provider === 'google' ? record.oauth_id : null;
+      const githubId = record.oauth_provider === 'github' ? record.oauth_id : null;
+      const displayName = record.name || '';
+      const avatarUrl = record.avatar_url || null;
+
       const [insertResult] = await db.execute(
-        'INSERT INTO users (email, auth_provider, email_verified) VALUES (?, "email_otp", 1)',
-        [cleanEmail]
+        'INSERT INTO users (name, email, google_id, github_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, ?, ?, ?, 1)',
+        [displayName || null, cleanEmail, googleId, githubId, provider, avatarUrl]
       );
       userId = insertResult.insertId;
       userObj = {
         id: userId,
         username: '',
-        name: '',
+        name: displayName,
         email: cleanEmail,
-        avatarUrl: null,
+        avatarUrl,
       };
 
       // Asynchronously dispatch welcome email (non-blocking)
-      emailService.sendWelcomeEmail(cleanEmail, '').catch((err) => {
+      emailService.sendWelcomeEmail(cleanEmail, displayName).catch((err) => {
         console.warn('⚠️ Welcome email background error:', err.message);
       });
     }
 
-    // Issue JWT token
+    // Issue JWT token only after successful OTP verification
     const token = jwt.sign(
       {
         id: userId,
@@ -538,6 +598,7 @@ router.post('/link/verify-otp', async (req, res) => {
 router.get('/google', async (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const redirectUri = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5000/api/auth/google/callback';
+  const mode = req.query.mode === 'signup' ? 'signup' : 'login';
 
   if (!clientId) {
     return res.status(500).json({ message: 'Google OAuth is not configured on the server.' });
@@ -547,8 +608,9 @@ router.get('/google', async (req, res) => {
     // Clean up expired login states
     await db.execute('DELETE FROM oauth_login_states WHERE expires_at < NOW()');
 
-    // Generate secure state token for login CSRF protection
-    const state = crypto.randomBytes(32).toString('hex');
+    // Generate secure state token encoding the auth mode for CSRF protection
+    const rawState = crypto.randomBytes(32).toString('hex');
+    const state = `${mode}_${rawState}`;
     await db.execute(
       `INSERT INTO oauth_login_states (state, provider, consumed, expires_at)
        VALUES (?, 'google', 0, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
@@ -576,12 +638,15 @@ router.get('/google/callback', async (req, res) => {
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
   const { code, state, error, error_description } = req.query;
 
+  const mode = (state && typeof state === 'string' && state.startsWith('signup_')) ? 'signup' : 'login';
+  const redirectPage = mode === 'signup' ? `${clientUrl}/signup` : `${clientUrl}/login`;
+
   if (error || !code || !state) {
     const isDenied = error === 'access_denied';
     const friendlyMsg = isDenied
       ? 'Google sign-in was cancelled.'
       : error_description || error || 'Google sign-in was cancelled.';
-    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent(friendlyMsg)}`);
+    return res.redirect(`${redirectPage}?error=${encodeURIComponent(friendlyMsg)}`);
   }
 
   try {
@@ -592,13 +657,13 @@ router.get('/google/callback', async (req, res) => {
     );
 
     if (loginRows.length === 0) {
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Invalid or unrecognized login session.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Invalid or unrecognized login session.')}`);
     }
 
     const loginRecord = loginRows[0];
     const nowTs = Math.floor(Date.now() / 1000);
     if (loginRecord.consumed !== 0 || loginRecord.expires_ts <= nowTs) {
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Login session expired or already used.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Login session expired or already used.')}`);
     }
 
     // Atomically consume login state
@@ -607,7 +672,7 @@ router.get('/google/callback', async (req, res) => {
       [loginRecord.id]
     );
     if (consumeRes.affectedRows === 0) {
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Login session already used.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Login session already used.')}`);
     }
 
     // Exchange authorization code for tokens
@@ -626,7 +691,7 @@ router.get('/google/callback', async (req, res) => {
     const tokenData = await tokenResponse.json();
     if (!tokenResponse.ok || !tokenData.access_token) {
       console.error('Google token exchange failed:', tokenData);
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Failed to exchange Google authorization code.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Failed to exchange Google authorization code.')}`);
     }
 
     // Fetch Google user profile
@@ -636,7 +701,7 @@ router.get('/google/callback', async (req, res) => {
     const googleUser = await userResponse.json();
     if (!userResponse.ok || !googleUser.email || !googleUser.sub) {
       console.error('Google user info failed:', googleUser);
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Failed to retrieve user profile from Google.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Failed to retrieve user profile from Google.')}`);
     }
 
     const email = googleUser.email.trim().toLowerCase();
@@ -644,96 +709,73 @@ router.get('/google/callback', async (req, res) => {
     const profileName = googleUser.name || googleUser.given_name || '';
     const avatarUrl = googleUser.picture || null;
 
-    // ── 1. Check if an account is already linked with this stable Google subject ID ──
-    const [byGoogleId] = await db.execute(
-      'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE google_id = ? LIMIT 1',
+    // ── Bug 3 Check: New users trying to login ──
+    const [existingByGoogle] = await db.execute(
+      'SELECT id FROM users WHERE google_id = ? LIMIT 1',
       [googleSub]
     );
-
-    if (byGoogleId.length > 0) {
-      const user = byGoogleId[0];
-      if (avatarUrl && !user.avatar_url) {
-        await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, user.id]);
-      }
-
-      const token = jwt.sign(
-        { id: user.id, username: user.username, email: user.email, name: user.name, avatarUrl: user.avatar_url || avatarUrl },
-        process.env.JWT_SECRET || 'rise_jwt_secret',
-        { expiresIn: '7d' }
-      );
-
-      const redirectParams = new URLSearchParams({
-        token,
-        username: user.username || '',
-        name: user.name || profileName || '',
-        email: user.email,
-        avatar: user.avatar_url || avatarUrl || '',
-      });
-
-      return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
-    }
-
-    // ── 2. Check if an account exists with this verified email ──
-    const [byEmail] = await db.execute(
-      'SELECT id, username, name, email, auth_provider, avatar_url, google_id FROM users WHERE email = ? LIMIT 1',
+    const [existingByEmail] = await db.execute(
+      'SELECT id FROM users WHERE email = ? LIMIT 1',
       [email]
     );
+    const userExists = existingByGoogle.length > 0 || existingByEmail.length > 0;
 
-    if (byEmail.length > 0) {
-      const existingUser = byEmail[0];
-
-      // Safe account linking: Do not automatically link without user OTP verification
-      const linkToken = crypto.randomBytes(32).toString('hex');
-      const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
-      const otpHash = hashOtp(rawOtp);
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-      await db.execute(
-        `INSERT INTO oauth_pending_links (link_token, email, provider, provider_id, provider_name, avatar_url, otp_hash, attempts, expires_at)
-         VALUES (?, ?, 'google', ?, ?, ?, ?, 0, ?)`,
-        [linkToken, email, googleSub, profileName, avatarUrl, otpHash, expiresAt]
+    if (mode === 'login' && !userExists) {
+      return res.redirect(
+        `${clientUrl}/login?error=${encodeURIComponent('No account found. Please sign up to create an account.')}`
       );
-
-      await sendLinkingEmail(email, rawOtp, 'Google', existingUser.name || profileName);
-
-      const linkParams = new URLSearchParams({
-        link_pending: '1',
-        provider: 'Google',
-        email,
-        link_token: linkToken,
-      });
-      if (process.env.NODE_ENV !== 'production') {
-        linkParams.set('dev_otp', rawOtp);
-      }
-
-      return res.redirect(`${clientUrl}/login?${linkParams.toString()}`);
     }
 
-    // ── 3. First-time Google user: Create new Rise account automatically ──
-    const [insertResult] = await db.execute(
-      'INSERT INTO users (name, email, google_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, "google", ?, 1)',
-      [profileName || null, email, googleSub, avatarUrl]
-    );
-    const newUserId = insertResult.insertId;
+    if (mode === 'signup' && userExists) {
+      return res.redirect(
+        `${clientUrl}/login?message=${encodeURIComponent('You already have an account. Log in here.')}`
+      );
+    }
 
-    const token = jwt.sign(
-      { id: newUserId, username: '', email, name: profileName, avatarUrl },
-      process.env.JWT_SECRET || 'rise_jwt_secret',
-      { expiresIn: '7d' }
+    // ── Bug 1 & 2: DO NOT create session/token yet. Generate and email OTP! ──
+    const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+    const otpHash = hashOtp(rawOtp);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Store in signup_otps table with OAuth metadata
+    await db.execute(
+      `INSERT INTO signup_otps (email, otp_hash, expires_at, attempts, purpose, oauth_provider, oauth_id, name, avatar_url, last_sent_at)
+       VALUES (?, ?, ?, 0, 'auth', 'google', ?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         otp_hash = VALUES(otp_hash),
+         expires_at = VALUES(expires_at),
+         attempts = 0,
+         purpose = 'auth',
+         oauth_provider = 'google',
+         oauth_id = VALUES(oauth_id),
+         name = VALUES(name),
+         avatar_url = VALUES(avatar_url),
+         last_sent_at = NOW()`,
+      [email, otpHash, expiresAt, googleSub, profileName, avatarUrl]
     );
 
+    // Send verification code to user's email
+    const emailResult = await sendOtpEmail(email, rawOtp, profileName);
+    if (!emailResult.success) {
+      await db.execute('DELETE FROM signup_otps WHERE email = ?', [email]);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Unable to send verification code to your email. Please try again.')}`);
+    }
+
+    // Redirect to frontend OTP input screen
     const redirectParams = new URLSearchParams({
-      token,
-      username: '',
-      name: profileName,
+      status: 'otp_required',
+      otp_required: '1',
       email,
-      avatar: avatarUrl || '',
+      auth_type: 'google',
     });
+    if (emailResult.simulated || process.env.NODE_ENV !== 'production') {
+      redirectParams.set('dev_otp', rawOtp);
+    }
 
-    return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+    return res.redirect(`${redirectPage}?${redirectParams.toString()}`);
   } catch (err) {
     console.error('Google callback error:', err);
-    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('An error occurred during Google sign-in.')}`);
+    return res.redirect(`${redirectPage}?error=${encodeURIComponent('An error occurred during Google sign-in.')}`);
   }
 });
 
@@ -743,6 +785,7 @@ router.get('/google/callback', async (req, res) => {
 router.get('/github', async (req, res) => {
   const clientId = process.env.GITHUB_CLIENT_ID;
   const redirectUri = process.env.GITHUB_CALLBACK_URL || 'http://localhost:5000/api/auth/github/callback';
+  const mode = req.query.mode === 'signup' ? 'signup' : 'login';
 
   if (!clientId) {
     return res.status(500).json({ message: 'GitHub OAuth is not configured on the server.' });
@@ -752,8 +795,9 @@ router.get('/github', async (req, res) => {
     // Clean up expired login states
     await db.execute('DELETE FROM oauth_login_states WHERE expires_at < NOW()');
 
-    // Generate secure state token for login CSRF protection
-    const state = crypto.randomBytes(32).toString('hex');
+    // Generate secure state token encoding auth mode
+    const rawState = crypto.randomBytes(32).toString('hex');
+    const state = `${mode}_${rawState}`;
     await db.execute(
       `INSERT INTO oauth_login_states (state, provider, consumed, expires_at)
        VALUES (?, 'github', 0, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
@@ -778,9 +822,12 @@ router.get('/github/callback', async (req, res) => {
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
   const { code, state, error, error_description } = req.query;
 
+  const mode = (state && typeof state === 'string' && state.startsWith('signup_')) ? 'signup' : 'login';
+  const redirectPage = mode === 'signup' ? `${clientUrl}/signup` : `${clientUrl}/login`;
+
   if (error || !code) {
     const msg = error_description || error || 'GitHub sign-in was cancelled.';
-    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent(msg)}`);
+    return res.redirect(`${redirectPage}?error=${encodeURIComponent(msg)}`);
   }
 
   try {
@@ -817,7 +864,7 @@ router.get('/github/callback', async (req, res) => {
     const tokenData = await tokenResponse.json();
     if (!tokenResponse.ok || !tokenData.access_token) {
       console.error('GitHub token exchange failed:', tokenData);
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent(tokenData.error_description || 'Failed to exchange GitHub authorization code.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent(tokenData.error_description || 'Failed to exchange GitHub authorization code.')}`);
     }
 
     // 2. Fetch GitHub user profile
@@ -831,7 +878,7 @@ router.get('/github/callback', async (req, res) => {
     const githubUser = await userResponse.json();
     if (!userResponse.ok || !githubUser.id) {
       console.error('GitHub user profile failed:', githubUser);
-      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Failed to retrieve user profile from GitHub.')}`);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Failed to retrieve user profile from GitHub.')}`);
     }
 
     const githubId = String(githubUser.id);
@@ -862,10 +909,9 @@ router.get('/github/callback', async (req, res) => {
       verifiedEmail = githubUser.email;
     }
 
-    // If NO verified email is available, require email OTP verification
     if (!verifiedEmail) {
       return res.redirect(
-        `${clientUrl}/login?error=${encodeURIComponent(
+        `${redirectPage}?error=${encodeURIComponent(
           'Your GitHub account does not have a verified email address. Please sign in with email OTP.'
         )}`
       );
@@ -873,93 +919,70 @@ router.get('/github/callback', async (req, res) => {
 
     verifiedEmail = verifiedEmail.trim().toLowerCase();
 
-    // ── 4. Check if account already exists with stable github_id ──
+    // ── Bug 3 Check: New users trying to login via GitHub ──
     const [byGithubId] = await db.execute(
-      'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE github_id = ? LIMIT 1',
+      'SELECT id FROM users WHERE github_id = ? LIMIT 1',
       [githubId]
     );
-
-    if (byGithubId.length > 0) {
-      const user = byGithubId[0];
-      if (avatarUrl && !user.avatar_url) {
-        await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, user.id]);
-      }
-
-      const token = jwt.sign(
-        { id: user.id, username: user.username, email: user.email, name: user.name, avatarUrl: user.avatar_url || avatarUrl },
-        process.env.JWT_SECRET || 'rise_jwt_secret',
-        { expiresIn: '7d' }
-      );
-
-      const redirectParams = new URLSearchParams({
-        token,
-        username: user.username || '',
-        name: user.name || profileName || '',
-        email: user.email,
-        avatar: user.avatar_url || avatarUrl || '',
-      });
-
-      return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
-    }
-
-    // ── 5. Check if account exists with this verified email ──
     const [byEmail] = await db.execute(
-      'SELECT id, username, name, email, auth_provider, avatar_url, github_id FROM users WHERE email = ? LIMIT 1',
+      'SELECT id FROM users WHERE email = ? LIMIT 1',
       [verifiedEmail]
     );
+    const userExists = byGithubId.length > 0 || byEmail.length > 0;
 
-    if (byEmail.length > 0) {
-      const existingUser = byEmail[0];
-
-      // Safe account linking: Do not automatically link without OTP verification
-      const linkToken = crypto.randomBytes(32).toString('hex');
-      const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
-      const otpHash = hashOtp(rawOtp);
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-      await db.execute(
-        `INSERT INTO oauth_pending_links (link_token, email, provider, provider_id, provider_name, avatar_url, otp_hash, attempts, expires_at)
-         VALUES (?, ?, 'github', ?, ?, ?, ?, 0, ?)`,
-        [linkToken, verifiedEmail, githubId, profileName, avatarUrl, otpHash, expiresAt]
+    if (mode === 'login' && !userExists) {
+      return res.redirect(
+        `${clientUrl}/login?error=${encodeURIComponent('No account found. Please sign up to create an account.')}`
       );
-
-      await sendLinkingEmail(verifiedEmail, rawOtp, 'GitHub', existingUser.name || profileName);
-
-      const linkParams = new URLSearchParams({
-        link_pending: '1',
-        provider: 'GitHub',
-        email: verifiedEmail,
-        link_token: linkToken,
-      });
-
-      return res.redirect(`${clientUrl}/login?${linkParams.toString()}`);
     }
 
-    // ── 6. First-time GitHub user: Create new Rise account automatically ──
-    const [insertResult] = await db.execute(
-      'INSERT INTO users (name, email, github_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, "github", ?, 1)',
-      [profileName || null, verifiedEmail, githubId, avatarUrl]
-    );
-    const newUserId = insertResult.insertId;
+    if (mode === 'signup' && userExists) {
+      return res.redirect(
+        `${clientUrl}/login?message=${encodeURIComponent('You already have an account. Log in here.')}`
+      );
+    }
 
-    const token = jwt.sign(
-      { id: newUserId, username: '', email: verifiedEmail, name: profileName, avatarUrl },
-      process.env.JWT_SECRET || 'rise_jwt_secret',
-      { expiresIn: '7d' }
+    // ── Bug 1 & 2: DO NOT create session/token yet. Generate and email OTP! ──
+    const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+    const otpHash = hashOtp(rawOtp);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await db.execute(
+      `INSERT INTO signup_otps (email, otp_hash, expires_at, attempts, purpose, oauth_provider, oauth_id, name, avatar_url, last_sent_at)
+       VALUES (?, ?, ?, 0, 'auth', 'github', ?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         otp_hash = VALUES(otp_hash),
+         expires_at = VALUES(expires_at),
+         attempts = 0,
+         purpose = 'auth',
+         oauth_provider = 'github',
+         oauth_id = VALUES(oauth_id),
+         name = VALUES(name),
+         avatar_url = VALUES(avatar_url),
+         last_sent_at = NOW()`,
+      [verifiedEmail, otpHash, expiresAt, githubId, profileName, avatarUrl]
     );
+
+    const emailResult = await sendOtpEmail(verifiedEmail, rawOtp, profileName);
+    if (!emailResult.success) {
+      await db.execute('DELETE FROM signup_otps WHERE email = ?', [verifiedEmail]);
+      return res.redirect(`${redirectPage}?error=${encodeURIComponent('Unable to send verification code to your email. Please try again.')}`);
+    }
 
     const redirectParams = new URLSearchParams({
-      token,
-      username: '',
-      name: profileName,
+      status: 'otp_required',
+      otp_required: '1',
       email: verifiedEmail,
-      avatar: avatarUrl || '',
+      auth_type: 'github',
     });
+    if (emailResult.simulated || process.env.NODE_ENV !== 'production') {
+      redirectParams.set('dev_otp', rawOtp);
+    }
 
-    return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+    return res.redirect(`${redirectPage}?${redirectParams.toString()}`);
   } catch (err) {
     console.error('GitHub callback error:', err);
-    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('An error occurred during GitHub sign-in.')}`);
+    return res.redirect(`${redirectPage}?error=${encodeURIComponent('An error occurred during GitHub sign-in.')}`);
   }
 });
 
@@ -967,6 +990,21 @@ router.get('/github/callback', async (req, res) => {
 // 7. Legacy Login & Profile Endpoints
 // ─────────────────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: 'Email address is required.' });
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  const [existingUsers] = await db.execute(
+    'SELECT id FROM users WHERE email = ? LIMIT 1',
+    [cleanEmail]
+  );
+  if (existingUsers.length === 0) {
+    return res.status(404).json({
+      status: 404,
+      message: 'No account found. Please sign up to create an account.',
+    });
+  }
   return res.status(400).json({
     success: false,
     message: 'Rise uses passwordless authentication. Please use /api/auth/request-otp with your email to receive a verification code.',

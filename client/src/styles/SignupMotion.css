@@ -164,6 +164,29 @@
   box-sizing: border-box;
 }
 
+.info-banner {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  font-weight: 500;
+  margin-top: 0.875rem;
+  margin-bottom: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.info-banner svg {
+  flex-shrink: 0;
+  color: #2563eb;
+}
+
 .auth__field label {
   font-size: 0.8125rem;
   line-height: 1rem;
