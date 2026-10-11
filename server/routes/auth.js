@@ -2,16 +2,10 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { Resend } = require('resend');
+const emailService = require('../services/emailService');
 const db = require('../config/db');
 const auth = require('../middleware/auth');
-
-// Initialize Resend
-const resendApiKey = process.env.RESEND_API_KEY;
-const resend = resendApiKey ? new Resend(resendApiKey) : null;
-const fromEmail = process.env.EMAIL_FROM || 'Rise <onboarding@resend.dev>';
 
 // Helper to hash OTP with server salt
 function hashOtp(otp) {
@@ -19,25 +13,38 @@ function hashOtp(otp) {
   return crypto.createHash('sha256').update(`${otp}:${salt}`).digest('hex');
 }
 
-// Helper to send transactional email
-async function sendOtpEmail(email, otp) {
-  const subject = 'Your Rise verification code';
+// Delegate verification email dispatching to emailService
+async function sendOtpEmail(email, otp, name) {
+  return emailService.sendVerificationEmail(email, otp, name);
+}
+
+// Send linking OTP email
+async function sendLinkingEmail(email, otp, provider, name) {
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('\n' + '='.repeat(60));
+    console.log(`🔑 [RISE ACCOUNT LINKING OTP CODE]: ${otp}`);
+    console.log(`📧 Recipient: ${email}`);
+    console.log(`🔗 Provider: ${provider}`);
+    console.log(`⏱️  Validity: 10 minutes`);
+    console.log('='.repeat(60) + '\n');
+  }
+  const subject = `Confirm linking your ${provider} account to Rise`;
   const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Your Rise Verification Code</title>
+      <title>Link your ${provider} account</title>
       <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 32px 16px; color: #0b1f44; }
-        .wrapper { max-width: 460px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 36px 32px; box-shadow: 0 4px 16px rgba(11,31,68,0.06); }
-        .logo-wrap { text-align: center; margin-bottom: 24px; }
+        .wrapper { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 36px 32px; box-shadow: 0 4px 16px rgba(11,31,68,0.06); }
+        .logo-wrap { text-align: center; margin-bottom: 20px; }
         .logo { font-size: 26px; font-weight: 800; color: #2563eb; letter-spacing: -0.04em; }
         h1 { font-size: 20px; font-weight: 700; color: #0b1f44; margin: 0 0 10px; text-align: center; }
         p { font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 24px; text-align: center; }
         .code-container { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; text-align: center; margin: 0 0 24px; }
-        .code { font-size: 34px; font-weight: 800; letter-spacing: 0.28em; color: #2563eb; font-family: ui-monospace, Menlo, Monaco, 'Courier New', monospace; margin-left: 0.28em; }
+        .code { font-size: 34px; font-weight: 800; letter-spacing: 0.28em; color: #2563eb; font-family: ui-monospace, Menlo, Monaco, monospace; margin-left: 0.28em; }
         .expiry { font-size: 13px; color: #64748b; text-align: center; margin-bottom: 24px; }
         .footer { font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 20px; margin: 0; }
       </style>
@@ -47,57 +54,43 @@ async function sendOtpEmail(email, otp) {
         <div class="logo-wrap">
           <span class="logo">RISE</span>
         </div>
-        <h1>Verify your email address</h1>
-        <p>Welcome to Rise! Please use the following 6-digit verification code to complete your account registration.</p>
+        <h1>Link your ${provider} account</h1>
+        <p>An account with this email address already exists. To securely link your ${provider} identity${name ? ` (${name})` : ''} to your Rise account, please enter the verification code below:</p>
         <div class="code-container">
           <span class="code">${otp}</span>
         </div>
         <div class="expiry">This code will expire in <strong>10 minutes</strong>.</div>
-        <p class="footer">If you did not request this verification code, please ignore this email.<br>© ${new Date().getFullYear()} Rise Technologies, Inc. All rights reserved.</p>
+        <p class="footer">If you did not initiate this link, please ignore this email.<br>© ${new Date().getFullYear()} Rise Technologies, Inc. All rights reserved.</p>
       </div>
     </body>
     </html>
   `;
-  const text = `Your Rise verification code is: ${otp}\n\nThis code will expire in 10 minutes.\nIf you did not request this code, you can safely ignore this email.\n\n© ${new Date().getFullYear()} Rise Technologies, Inc.`;
+  const text = `Your Rise linking verification code for ${provider} is: ${otp}\n\nThis code will expire in 10 minutes.\nIf you did not request this, you can safely ignore this email.`;
 
-  if (resend) {
-    try {
-      const response = await resend.emails.send({
-        from: fromEmail,
-        to: email,
-        subject,
-        html,
-        text
-      });
-      if (response.error) {
-        console.warn('⚠️ Resend email returned response error:', response.error);
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`\n[DEV OTP FALLBACK] Code for ${email}: ${otp}\n`);
-        }
-      }
-      return { success: true, id: response.data?.id };
-    } catch (err) {
-      console.warn('⚠️ Resend API exception:', err.message);
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`\n[DEV OTP FALLBACK] Code for ${email}: ${otp}\n`);
-      }
-      return { success: false, error: err.message };
-    }
-  } else {
-    // When RESEND_API_KEY is not configured, log to server console for local testing
-    console.log(`\n========================================\n[DEV OTP] Verification code for ${email}: ${otp}\n========================================\n`);
-    return { success: true, simulated: true };
-  }
+  return emailService.sendEmail({ to: email, subject, html, text });
 }
 
-/**
- * POST /api/auth/signup/request-otp
- * Step 1: Validate credentials, check uniqueness, generate & hash OTP, send email.
- */
-router.post('/signup/request-otp', async (req, res) => {
-  const { email, password } = req.body;
+// Helper to validate username format (kept for legacy support)
+function validateUsername(username) {
+  if (!username || typeof username !== 'string') {
+    return { valid: false, message: 'Username is required.' };
+  }
+  const clean = username.trim();
+  if (clean.length < 3 || clean.length > 30) {
+    return { valid: false, message: 'Username must be between 3 and 30 characters.' };
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(clean)) {
+    return { valid: false, message: 'Username can only contain letters, numbers, and underscores.' };
+  }
+  return { valid: true, username: clean };
+}
 
-  // Validation
+// ─────────────────────────────────────────────────────────────
+// 1. Passwordless Email OTP: Request OTP (both /signup & /login)
+// ─────────────────────────────────────────────────────────────
+router.post(['/request-otp', '/signup/request-otp'], async (req, res) => {
+  const { email } = req.body;
+
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ message: 'A valid email address is required.' });
   }
@@ -105,24 +98,9 @@ router.post('/signup/request-otp', async (req, res) => {
   if (!/\S+@\S+\.\S+/.test(cleanEmail)) {
     return res.status(400).json({ message: 'Please enter a valid email address.' });
   }
-  if (!password || typeof password !== 'string') {
-    return res.status(400).json({ message: 'Password is required.' });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
-  }
 
   try {
-    // Check if user already exists
-    const [existingUsers] = await db.execute(
-      'SELECT id FROM users WHERE email = ? LIMIT 1',
-      [cleanEmail]
-    );
-    if (existingUsers.length > 0) {
-      return res.status(400).json({ message: 'An account with this email address already exists. Please log in.' });
-    }
-
-    // Check rate limit / cooldown from existing pending signup
+    // Check rate limit / cooldown from existing pending OTP
     const [pendingRows] = await db.execute(
       'SELECT id, UNIX_TIMESTAMP(last_sent_at) as last_sent_ts FROM signup_otps WHERE email = ? LIMIT 1',
       [cleanEmail]
@@ -134,52 +112,65 @@ router.post('/signup/request-otp', async (req, res) => {
         const remaining = 30 - elapsed;
         return res.status(429).json({
           message: `Please wait ${remaining} seconds before requesting another code.`,
-          cooldownRemaining: remaining
+          cooldownRemaining: remaining,
         });
       }
     }
 
-    // Hash password
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    // Generate secure 6-digit OTP
-    const rawOtp = crypto.randomInt(100000, 1000000).toString();
+    // Generate cryptographically secure 6-digit OTP supporting leading zeros
+    const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
     const otpHash = hashOtp(rawOtp);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Store in signup_otps
+    // Store in signup_otps table
     await db.execute(
-      `INSERT INTO signup_otps (email, password_hash, otp_hash, expires_at, attempts, last_sent_at)
-       VALUES (?, ?, ?, ?, 0, NOW())
+      `INSERT INTO signup_otps (email, otp_hash, expires_at, attempts, purpose, last_sent_at)
+       VALUES (?, ?, ?, 0, 'auth', NOW())
        ON DUPLICATE KEY UPDATE
-         password_hash = VALUES(password_hash),
          otp_hash = VALUES(otp_hash),
          expires_at = VALUES(expires_at),
          attempts = 0,
+         purpose = 'auth',
          last_sent_at = NOW()`,
-      [cleanEmail, passwordHash, otpHash, expiresAt]
+      [cleanEmail, otpHash, expiresAt]
     );
 
-    // Dispatch email
-    await sendOtpEmail(cleanEmail, rawOtp);
+    // Dispatch email using the Rise OTP verification email template
+    const emailResult = await sendOtpEmail(cleanEmail, rawOtp);
+    if (!emailResult.success) {
+      // Invalidate session if delivery failed
+      await db.execute('DELETE FROM signup_otps WHERE email = ?', [cleanEmail]);
+      return res.status(500).json({
+        message: 'Unable to deliver verification email at this time. Please try again later.'
+      });
+    }
 
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
-      message: 'Verification code sent to your email.',
+      message: emailResult.simulated
+        ? 'Verification code generated! (SMTP daily quota limit reached: check terminal for code)'
+        : 'Verification code sent to your email.',
       email: cleanEmail,
-      cooldown: 30
-    });
+      cooldown: 30,
+    };
+    if (emailResult.simulated) {
+      responsePayload.notice = 'Gmail daily SMTP limit reached. Code logged in backend terminal.';
+      if (process.env.NODE_ENV !== 'production') {
+        responsePayload.devOtp = rawOtp;
+      }
+    }
+
+    return res.status(200).json(responsePayload);
   } catch (err) {
     console.error('request-otp error:', err);
-    return res.status(500).json({ message: 'Unable to process sign up request. Please try again.' });
+    return res.status(500).json({ message: 'Unable to process verification request. Please try again.' });
   }
 });
 
-/**
- * POST /api/auth/signup/verify-otp
- * Step 2: Validate 6-digit OTP, create user account, delete pending OTP, issue session.
- */
-router.post('/signup/verify-otp', async (req, res) => {
+// ─────────────────────────────────────────────────────────────
+// 2. Passwordless Email OTP: Verify OTP (both /signup & /login)
+// ─────────────────────────────────────────────────────────────
+router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
   const { email, otp } = req.body;
 
   if (!email || !otp) {
@@ -194,14 +185,13 @@ router.post('/signup/verify-otp', async (req, res) => {
 
   try {
     const [rows] = await db.execute(
-      `SELECT id, password_hash, otp_hash, attempts,
-              UNIX_TIMESTAMP(expires_at) as expires_ts
+      `SELECT id, otp_hash, attempts, UNIX_TIMESTAMP(expires_at) as expires_ts
        FROM signup_otps WHERE email = ? LIMIT 1`,
       [cleanEmail]
     );
 
     if (rows.length === 0) {
-      return res.status(400).json({ message: 'No verification session found for this email. Please start over.' });
+      return res.status(400).json({ message: 'No verification session found for this email. Please request a new code.' });
     }
 
     const record = rows[0];
@@ -221,62 +211,92 @@ router.post('/signup/verify-otp', async (req, res) => {
     const submittedHash = hashOtp(cleanOtp);
     if (submittedHash !== record.otp_hash) {
       const nextAttempts = record.attempts + 1;
-      await db.execute(
-        'UPDATE signup_otps SET attempts = ? WHERE id = ?',
-        [nextAttempts, record.id]
-      );
+      await db.execute('UPDATE signup_otps SET attempts = ? WHERE id = ?', [nextAttempts, record.id]);
       const remaining = 5 - nextAttempts;
       return res.status(400).json({
-        message: remaining > 0
-          ? `Incorrect code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
-          : 'Incorrect code. Maximum attempts reached. Please request a new code.'
+        message:
+          remaining > 0
+            ? `Incorrect code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+            : 'Incorrect code. Maximum attempts reached. Please request a new code.',
       });
     }
 
-    // Create user securely in users table
-    const defaultName = cleanEmail.split('@')[0];
-    const [insertResult] = await db.execute(
-      'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-      [defaultName, cleanEmail, record.password_hash]
-    );
-    const userId = insertResult.insertId;
-
-    // Consume & remove OTP session
+    // OTP verified successfully: Consume & remove OTP session
     await db.execute('DELETE FROM signup_otps WHERE email = ?', [cleanEmail]);
+
+    // Check if user already exists
+    const [existingUsers] = await db.execute(
+      'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE email = ? LIMIT 1',
+      [cleanEmail]
+    );
+
+    let userObj;
+    let userId;
+    let isNewUser = false;
+
+    if (existingUsers.length > 0) {
+      // ── EXISTING USER: Preserves existing progress, enrollments & settings ──
+      const user = existingUsers[0];
+      userId = user.id;
+      userObj = {
+        id: user.id,
+        username: user.username || '',
+        name: user.name || user.username || '',
+        email: user.email,
+        avatarUrl: user.avatar_url || null,
+      };
+    } else {
+      // ── NEW USER: Automatically created passwordlessly ──
+      isNewUser = true;
+      const [insertResult] = await db.execute(
+        'INSERT INTO users (email, auth_provider, email_verified) VALUES (?, "email_otp", 1)',
+        [cleanEmail]
+      );
+      userId = insertResult.insertId;
+      userObj = {
+        id: userId,
+        username: '',
+        name: '',
+        email: cleanEmail,
+        avatarUrl: null,
+      };
+
+      // Asynchronously dispatch welcome email (non-blocking)
+      emailService.sendWelcomeEmail(cleanEmail, '').catch((err) => {
+        console.warn('⚠️ Welcome email background error:', err.message);
+      });
+    }
 
     // Issue JWT token
     const token = jwt.sign(
-      { id: userId, email: cleanEmail, name: defaultName },
+      {
+        id: userId,
+        username: userObj.username,
+        email: cleanEmail,
+        name: userObj.name,
+        avatarUrl: userObj.avatarUrl,
+      },
       process.env.JWT_SECRET || 'rise_jwt_secret',
       { expiresIn: '7d' }
     );
 
-    const userObj = {
-      id: userId,
-      email: cleanEmail,
-      name: defaultName
-    };
-
     return res.status(200).json({
       success: true,
-      message: 'Account verified and created successfully.',
+      isNewUser,
+      message: isNewUser ? 'Account verified and created successfully.' : 'Welcome back! Signed in successfully.',
       user: userObj,
-      token
+      token,
     });
   } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(400).json({ message: 'An account with this email already exists.' });
-    }
     console.error('verify-otp error:', err);
-    return res.status(500).json({ message: 'Failed to verify code. Please try again.' });
+    return res.status(500).json({ message: 'Verification failed. Please try again.' });
   }
 });
 
-/**
- * POST /api/auth/signup/resend-otp
- * Step 3: Resend OTP with server-side 30-second cooldown enforcement.
- */
-router.post('/signup/resend-otp', async (req, res) => {
+// ─────────────────────────────────────────────────────────────
+// 3. Passwordless Email OTP: Resend OTP
+// ─────────────────────────────────────────────────────────────
+router.post(['/resend-otp', '/signup/resend-otp'], async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
@@ -286,14 +306,13 @@ router.post('/signup/resend-otp', async (req, res) => {
 
   try {
     const [rows] = await db.execute(
-      `SELECT id, password_hash,
-              UNIX_TIMESTAMP(last_sent_at) as last_sent_ts
+      `SELECT id, UNIX_TIMESTAMP(last_sent_at) as last_sent_ts
        FROM signup_otps WHERE email = ? LIMIT 1`,
       [cleanEmail]
     );
 
     if (rows.length === 0) {
-      return res.status(400).json({ message: 'No signup in progress for this email. Please start over.' });
+      return res.status(400).json({ message: 'No verification session in progress for this email. Please request a new code.' });
     }
 
     const record = rows[0];
@@ -304,12 +323,12 @@ router.post('/signup/resend-otp', async (req, res) => {
       const remaining = 30 - elapsed;
       return res.status(429).json({
         message: `Please wait ${remaining} seconds before resending.`,
-        cooldownRemaining: remaining
+        cooldownRemaining: remaining,
       });
     }
 
-    // Generate fresh OTP
-    const rawOtp = crypto.randomInt(100000, 1000000).toString();
+    // Generate fresh OTP supporting leading zeros
+    const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
     const otpHash = hashOtp(rawOtp);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -320,78 +339,644 @@ router.post('/signup/resend-otp', async (req, res) => {
       [otpHash, expiresAt, record.id]
     );
 
-    await sendOtpEmail(cleanEmail, rawOtp);
+    const emailResult = await sendOtpEmail(cleanEmail, rawOtp);
+    if (!emailResult.success) {
+      return res.status(500).json({
+        message: 'Unable to deliver verification email at this time. Please try again later.'
+      });
+    }
 
     return res.status(200).json({
       success: true,
       message: 'A fresh verification code has been sent to your email.',
-      cooldown: 30
+      cooldown: 30,
     });
   } catch (err) {
     console.error('resend-otp error:', err);
     return res.status(500).json({ message: 'Failed to resend code. Please try again.' });
   }
 });
+// ─────────────────────────────────────────────────────────────
+// 3b. Account Linking: Resend Linking OTP
+// ─────────────────────────────────────────────────────────────
+router.post(['/link/resend-otp', '/auth/link/resend-otp'], async (req, res) => {
+  const { link_token, linkToken } = req.body;
+  const token = link_token || linkToken;
 
-/**
- * POST /api/auth/login
- * Standard login endpoint for existing users.
- */
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required.' });
+  if (!token) {
+    return res.status(400).json({ message: 'Link token is required.' });
   }
-  const cleanEmail = email.trim().toLowerCase();
 
   try {
-    const [users] = await db.execute(
-      'SELECT id, name, email, password_hash, auth_provider, avatar_url FROM users WHERE email = ? LIMIT 1',
-      [cleanEmail]
+    const [rows] = await db.execute(
+      `SELECT id, email, provider, provider_name, UNIX_TIMESTAMP(expires_at) as expires_ts, consumed
+       FROM oauth_pending_links WHERE link_token = ? LIMIT 1`,
+      [token]
     );
-    if (users.length === 0) {
-      return res.status(401).json({ message: 'Invalid email or password.' });
-    }
-    const user = users[0];
 
-    // Check if account was registered via OAuth
-    if (!user.password_hash) {
-      const provider = user.auth_provider === 'github' ? 'GitHub' : 'Google';
-      return res.status(400).json({
-        message: `This account was registered with ${provider}. Please sign in with ${provider}.`
+    if (rows.length === 0) {
+      return res.status(400).json({ message: 'No active linking session found. Please start sign-in again.' });
+    }
+
+    const record = rows[0];
+    const nowTs = Math.floor(Date.now() / 1000);
+
+    if (record.consumed !== 0 || nowTs > record.expires_ts) {
+      return res.status(400).json({ message: 'Linking session has expired. Please sign in again.' });
+    }
+
+    // Generate fresh OTP supporting leading zeros
+    const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+    const otpHash = hashOtp(rawOtp);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await db.execute(
+      `UPDATE oauth_pending_links
+       SET otp_hash = ?, expires_at = ?, attempts = 0
+       WHERE id = ?`,
+      [otpHash, expiresAt, record.id]
+    );
+
+    const emailResult = await sendLinkingEmail(record.email, rawOtp, record.provider, record.provider_name);
+    if (!emailResult.success) {
+      return res.status(500).json({
+        message: 'Unable to deliver verification email at this time. Please try again later.'
       });
     }
 
-    const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) {
-      return res.status(401).json({ message: 'Invalid email or password.' });
+    const responsePayload = {
+      success: true,
+      message: 'A fresh verification code has been sent to your email.',
+      cooldown: 30,
+    };
+    if (emailResult.simulated) {
+      responsePayload.notice = 'Gmail daily SMTP limit reached. Code logged in terminal.';
+      if (process.env.NODE_ENV !== 'production') {
+        responsePayload.devOtp = rawOtp;
+      }
+    }
+
+    return res.status(200).json(responsePayload);
+  } catch (err) {
+    console.error('link/resend-otp error:', err);
+    return res.status(500).json({ message: 'Failed to resend linking code. Please try again.' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 4. Secure Account Linking: Verify Linking OTP
+// ─────────────────────────────────────────────────────────────
+router.post('/link/verify-otp', async (req, res) => {
+  const { link_token, otp } = req.body;
+
+  if (!link_token || !otp) {
+    return res.status(400).json({ message: 'Link token and 6-digit verification code are required.' });
+  }
+
+  const cleanOtp = otp.toString().trim();
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    return res.status(400).json({ message: 'Verification code must be 6 digits.' });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      `SELECT id, email, provider, provider_id, provider_name, avatar_url, otp_hash, attempts,
+              UNIX_TIMESTAMP(expires_at) as expires_ts, consumed
+       FROM oauth_pending_links WHERE link_token = ? LIMIT 1`,
+      [link_token]
+    );
+
+    if (rows.length === 0) {
+      return res.status(400).json({ message: 'Invalid or expired linking session. Please start sign-in again.' });
+    }
+
+    const record = rows[0];
+    const nowTs = Math.floor(Date.now() / 1000);
+
+    if (record.consumed !== 0 || nowTs > record.expires_ts) {
+      return res.status(400).json({ message: 'Linking session has expired. Please sign in again.' });
+    }
+
+    if (record.attempts >= 5) {
+      return res.status(400).json({ message: 'Too many incorrect attempts. Please initiate linking again.' });
+    }
+
+    const submittedHash = hashOtp(cleanOtp);
+    if (submittedHash !== record.otp_hash) {
+      const nextAttempts = record.attempts + 1;
+      await db.execute('UPDATE oauth_pending_links SET attempts = ? WHERE id = ?', [nextAttempts, record.id]);
+      const remaining = 5 - nextAttempts;
+      return res.status(400).json({
+        message:
+          remaining > 0
+            ? `Incorrect code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+            : 'Incorrect code. Maximum attempts reached.',
+      });
+    }
+
+    // Mark linking session consumed
+    await db.execute('UPDATE oauth_pending_links SET consumed = 1 WHERE id = ?', [record.id]);
+
+    // Find target user by verified email
+    const [userRows] = await db.execute(
+      'SELECT id, username, name, email, avatar_url, google_id, github_id FROM users WHERE email = ? LIMIT 1',
+      [record.email]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(400).json({ message: 'Account not found for linking.' });
+    }
+
+    const user = userRows[0];
+
+    // Link provider identity securely
+    if (record.provider === 'google') {
+      await db.execute(
+        'UPDATE users SET google_id = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?',
+        [record.provider_id, record.avatar_url, user.id]
+      );
+    } else if (record.provider === 'github') {
+      await db.execute(
+        'UPDATE users SET github_id = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?',
+        [record.provider_id, record.avatar_url, user.id]
+      );
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatar_url },
+      {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatar_url || record.avatar_url,
+      },
       process.env.JWT_SECRET || 'rise_jwt_secret',
       { expiresIn: '7d' }
     );
 
     return res.status(200).json({
       success: true,
-      user: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatar_url },
-      token
+      message: `${record.provider === 'google' ? 'Google' : 'GitHub'} account linked successfully.`,
+      user: {
+        id: user.id,
+        username: user.username || '',
+        name: user.name || user.username || '',
+        email: user.email,
+        avatarUrl: user.avatar_url || record.avatar_url,
+      },
+      token,
     });
   } catch (err) {
-    console.error('login error:', err);
-    return res.status(500).json({ message: 'Login failed. Please try again.' });
+    console.error('link/verify-otp error:', err);
+    return res.status(500).json({ message: 'Failed to verify linking code.' });
   }
 });
 
-/**
- * GET /api/auth/me
- * Returns currently authenticated user details
- */
+// ─────────────────────────────────────────────────────────────
+// 5. Google OAuth Flow
+// ─────────────────────────────────────────────────────────────
+router.get('/google', async (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5000/api/auth/google/callback';
+
+  if (!clientId) {
+    return res.status(500).json({ message: 'Google OAuth is not configured on the server.' });
+  }
+
+  try {
+    // Clean up expired login states
+    await db.execute('DELETE FROM oauth_login_states WHERE expires_at < NOW()');
+
+    // Generate secure state token for login CSRF protection
+    const state = crypto.randomBytes(32).toString('hex');
+    await db.execute(
+      `INSERT INTO oauth_login_states (state, provider, consumed, expires_at)
+       VALUES (?, 'google', 0, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+      [state]
+    );
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      access_type: 'offline',
+      prompt: 'select_account',
+      state,
+    });
+
+    return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+  } catch (err) {
+    console.error('google login init error:', err);
+    return res.status(500).json({ message: 'Failed to initiate Google sign-in.' });
+  }
+});
+
+router.get('/google/callback', async (req, res) => {
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  const { code, state, error, error_description } = req.query;
+
+  if (error || !code || !state) {
+    const isDenied = error === 'access_denied';
+    const friendlyMsg = isDenied
+      ? 'Google sign-in was cancelled.'
+      : error_description || error || 'Google sign-in was cancelled.';
+    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent(friendlyMsg)}`);
+  }
+
+  try {
+    // Validate state token (single-use CSRF protection)
+    const [loginRows] = await db.execute(
+      'SELECT id, consumed, UNIX_TIMESTAMP(expires_at) as expires_ts FROM oauth_login_states WHERE state = ? LIMIT 1',
+      [state]
+    );
+
+    if (loginRows.length === 0) {
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Invalid or unrecognized login session.')}`);
+    }
+
+    const loginRecord = loginRows[0];
+    const nowTs = Math.floor(Date.now() / 1000);
+    if (loginRecord.consumed !== 0 || loginRecord.expires_ts <= nowTs) {
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Login session expired or already used.')}`);
+    }
+
+    // Atomically consume login state
+    const [consumeRes] = await db.execute(
+      'UPDATE oauth_login_states SET consumed = 1 WHERE id = ? AND consumed = 0',
+      [loginRecord.id]
+    );
+    if (consumeRes.affectedRows === 0) {
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Login session already used.')}`);
+    }
+
+    // Exchange authorization code for tokens
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5000/api/auth/google/callback',
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      console.error('Google token exchange failed:', tokenData);
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Failed to exchange Google authorization code.')}`);
+    }
+
+    // Fetch Google user profile
+    const userResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const googleUser = await userResponse.json();
+    if (!userResponse.ok || !googleUser.email || !googleUser.sub) {
+      console.error('Google user info failed:', googleUser);
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Failed to retrieve user profile from Google.')}`);
+    }
+
+    const email = googleUser.email.trim().toLowerCase();
+    const googleSub = String(googleUser.sub);
+    const profileName = googleUser.name || googleUser.given_name || '';
+    const avatarUrl = googleUser.picture || null;
+
+    // ── 1. Check if an account is already linked with this stable Google subject ID ──
+    const [byGoogleId] = await db.execute(
+      'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE google_id = ? LIMIT 1',
+      [googleSub]
+    );
+
+    if (byGoogleId.length > 0) {
+      const user = byGoogleId[0];
+      if (avatarUrl && !user.avatar_url) {
+        await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, user.id]);
+      }
+
+      const token = jwt.sign(
+        { id: user.id, username: user.username, email: user.email, name: user.name, avatarUrl: user.avatar_url || avatarUrl },
+        process.env.JWT_SECRET || 'rise_jwt_secret',
+        { expiresIn: '7d' }
+      );
+
+      const redirectParams = new URLSearchParams({
+        token,
+        username: user.username || '',
+        name: user.name || profileName || '',
+        email: user.email,
+        avatar: user.avatar_url || avatarUrl || '',
+      });
+
+      return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+    }
+
+    // ── 2. Check if an account exists with this verified email ──
+    const [byEmail] = await db.execute(
+      'SELECT id, username, name, email, auth_provider, avatar_url, google_id FROM users WHERE email = ? LIMIT 1',
+      [email]
+    );
+
+    if (byEmail.length > 0) {
+      const existingUser = byEmail[0];
+
+      // Safe account linking: Do not automatically link without user OTP verification
+      const linkToken = crypto.randomBytes(32).toString('hex');
+      const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+      const otpHash = hashOtp(rawOtp);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      await db.execute(
+        `INSERT INTO oauth_pending_links (link_token, email, provider, provider_id, provider_name, avatar_url, otp_hash, attempts, expires_at)
+         VALUES (?, ?, 'google', ?, ?, ?, ?, 0, ?)`,
+        [linkToken, email, googleSub, profileName, avatarUrl, otpHash, expiresAt]
+      );
+
+      await sendLinkingEmail(email, rawOtp, 'Google', existingUser.name || profileName);
+
+      const linkParams = new URLSearchParams({
+        link_pending: '1',
+        provider: 'Google',
+        email,
+        link_token: linkToken,
+      });
+      if (process.env.NODE_ENV !== 'production') {
+        linkParams.set('dev_otp', rawOtp);
+      }
+
+      return res.redirect(`${clientUrl}/login?${linkParams.toString()}`);
+    }
+
+    // ── 3. First-time Google user: Create new Rise account automatically ──
+    const [insertResult] = await db.execute(
+      'INSERT INTO users (name, email, google_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, "google", ?, 1)',
+      [profileName || null, email, googleSub, avatarUrl]
+    );
+    const newUserId = insertResult.insertId;
+
+    const token = jwt.sign(
+      { id: newUserId, username: '', email, name: profileName, avatarUrl },
+      process.env.JWT_SECRET || 'rise_jwt_secret',
+      { expiresIn: '7d' }
+    );
+
+    const redirectParams = new URLSearchParams({
+      token,
+      username: '',
+      name: profileName,
+      email,
+      avatar: avatarUrl || '',
+    });
+
+    return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+  } catch (err) {
+    console.error('Google callback error:', err);
+    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('An error occurred during Google sign-in.')}`);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 6. GitHub OAuth Flow
+// ─────────────────────────────────────────────────────────────
+router.get('/github', async (req, res) => {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  const redirectUri = process.env.GITHUB_CALLBACK_URL || 'http://localhost:5000/api/auth/github/callback';
+
+  if (!clientId) {
+    return res.status(500).json({ message: 'GitHub OAuth is not configured on the server.' });
+  }
+
+  try {
+    // Clean up expired login states
+    await db.execute('DELETE FROM oauth_login_states WHERE expires_at < NOW()');
+
+    // Generate secure state token for login CSRF protection
+    const state = crypto.randomBytes(32).toString('hex');
+    await db.execute(
+      `INSERT INTO oauth_login_states (state, provider, consumed, expires_at)
+       VALUES (?, 'github', 0, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+      [state]
+    );
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: 'read:user user:email',
+      state,
+    });
+
+    return res.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
+  } catch (err) {
+    console.error('GitHub init error:', err);
+    return res.status(500).json({ message: 'Failed to initiate GitHub sign-in.' });
+  }
+});
+
+router.get('/github/callback', async (req, res) => {
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  const { code, state, error, error_description } = req.query;
+
+  if (error || !code) {
+    const msg = error_description || error || 'GitHub sign-in was cancelled.';
+    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent(msg)}`);
+  }
+
+  try {
+    // Validate state if present
+    if (state) {
+      const [loginRows] = await db.execute(
+        'SELECT id, consumed, UNIX_TIMESTAMP(expires_at) as expires_ts FROM oauth_login_states WHERE state = ? LIMIT 1',
+        [state]
+      );
+      if (loginRows.length > 0) {
+        const loginRecord = loginRows[0];
+        const nowTs = Math.floor(Date.now() / 1000);
+        if (loginRecord.consumed === 0 && loginRecord.expires_ts > nowTs) {
+          await db.execute('UPDATE oauth_login_states SET consumed = 1 WHERE id = ?', [loginRecord.id]);
+        }
+      }
+    }
+
+    // 1. Exchange authorization code for access token
+    const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: process.env.GITHUB_CALLBACK_URL || 'http://localhost:5000/api/auth/github/callback',
+      }),
+    });
+
+    const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      console.error('GitHub token exchange failed:', tokenData);
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent(tokenData.error_description || 'Failed to exchange GitHub authorization code.')}`);
+    }
+
+    // 2. Fetch GitHub user profile
+    const userResponse = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        'User-Agent': 'Rise-App',
+      },
+    });
+
+    const githubUser = await userResponse.json();
+    if (!userResponse.ok || !githubUser.id) {
+      console.error('GitHub user profile failed:', githubUser);
+      return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('Failed to retrieve user profile from GitHub.')}`);
+    }
+
+    const githubId = String(githubUser.id);
+    const profileName = githubUser.name || githubUser.login || 'GitHub User';
+    const avatarUrl = githubUser.avatar_url || null;
+
+    // 3. Extract verified email through GitHub Email API
+    let verifiedEmail = null;
+    try {
+      const emailsResponse = await fetch('https://api.github.com/user/emails', {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          'User-Agent': 'Rise-App',
+        },
+      });
+      const emails = await emailsResponse.json();
+      if (Array.isArray(emails)) {
+        const primaryVerified = emails.find((e) => e.primary && e.verified);
+        const anyVerified = emails.find((e) => e.verified);
+        if (primaryVerified) verifiedEmail = primaryVerified.email;
+        else if (anyVerified) verifiedEmail = anyVerified.email;
+      }
+    } catch (err) {
+      console.warn('Could not fetch secondary GitHub emails:', err);
+    }
+
+    if (!verifiedEmail && githubUser.email) {
+      verifiedEmail = githubUser.email;
+    }
+
+    // If NO verified email is available, require email OTP verification
+    if (!verifiedEmail) {
+      return res.redirect(
+        `${clientUrl}/login?error=${encodeURIComponent(
+          'Your GitHub account does not have a verified email address. Please sign in with email OTP.'
+        )}`
+      );
+    }
+
+    verifiedEmail = verifiedEmail.trim().toLowerCase();
+
+    // ── 4. Check if account already exists with stable github_id ──
+    const [byGithubId] = await db.execute(
+      'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE github_id = ? LIMIT 1',
+      [githubId]
+    );
+
+    if (byGithubId.length > 0) {
+      const user = byGithubId[0];
+      if (avatarUrl && !user.avatar_url) {
+        await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, user.id]);
+      }
+
+      const token = jwt.sign(
+        { id: user.id, username: user.username, email: user.email, name: user.name, avatarUrl: user.avatar_url || avatarUrl },
+        process.env.JWT_SECRET || 'rise_jwt_secret',
+        { expiresIn: '7d' }
+      );
+
+      const redirectParams = new URLSearchParams({
+        token,
+        username: user.username || '',
+        name: user.name || profileName || '',
+        email: user.email,
+        avatar: user.avatar_url || avatarUrl || '',
+      });
+
+      return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+    }
+
+    // ── 5. Check if account exists with this verified email ──
+    const [byEmail] = await db.execute(
+      'SELECT id, username, name, email, auth_provider, avatar_url, github_id FROM users WHERE email = ? LIMIT 1',
+      [verifiedEmail]
+    );
+
+    if (byEmail.length > 0) {
+      const existingUser = byEmail[0];
+
+      // Safe account linking: Do not automatically link without OTP verification
+      const linkToken = crypto.randomBytes(32).toString('hex');
+      const rawOtp = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+      const otpHash = hashOtp(rawOtp);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      await db.execute(
+        `INSERT INTO oauth_pending_links (link_token, email, provider, provider_id, provider_name, avatar_url, otp_hash, attempts, expires_at)
+         VALUES (?, ?, 'github', ?, ?, ?, ?, 0, ?)`,
+        [linkToken, verifiedEmail, githubId, profileName, avatarUrl, otpHash, expiresAt]
+      );
+
+      await sendLinkingEmail(verifiedEmail, rawOtp, 'GitHub', existingUser.name || profileName);
+
+      const linkParams = new URLSearchParams({
+        link_pending: '1',
+        provider: 'GitHub',
+        email: verifiedEmail,
+        link_token: linkToken,
+      });
+
+      return res.redirect(`${clientUrl}/login?${linkParams.toString()}`);
+    }
+
+    // ── 6. First-time GitHub user: Create new Rise account automatically ──
+    const [insertResult] = await db.execute(
+      'INSERT INTO users (name, email, github_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, "github", ?, 1)',
+      [profileName || null, verifiedEmail, githubId, avatarUrl]
+    );
+    const newUserId = insertResult.insertId;
+
+    const token = jwt.sign(
+      { id: newUserId, username: '', email: verifiedEmail, name: profileName, avatarUrl },
+      process.env.JWT_SECRET || 'rise_jwt_secret',
+      { expiresIn: '7d' }
+    );
+
+    const redirectParams = new URLSearchParams({
+      token,
+      username: '',
+      name: profileName,
+      email: verifiedEmail,
+      avatar: avatarUrl || '',
+    });
+
+    return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+  } catch (err) {
+    console.error('GitHub callback error:', err);
+    return res.redirect(`${clientUrl}/login?error=${encodeURIComponent('An error occurred during GitHub sign-in.')}`);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 7. Legacy Login & Profile Endpoints
+// ─────────────────────────────────────────────────────────────
+router.post('/login', async (req, res) => {
+  return res.status(400).json({
+    success: false,
+    message: 'Rise uses passwordless authentication. Please use /api/auth/request-otp with your email to receive a verification code.',
+  });
+});
+
 router.get('/me', auth, async (req, res) => {
   try {
     const [users] = await db.execute(
-      'SELECT id, name, email, auth_provider, avatar_url, created_at FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, username, name, email, auth_provider, avatar_url, created_at FROM users WHERE id = ? LIMIT 1',
       [req.user.id]
     );
     if (users.length === 0) {
@@ -404,261 +989,24 @@ router.get('/me', auth, async (req, res) => {
   }
 });
 
-/**
- * GET /api/auth/google
- * Redirects user to Google OAuth 2.0 Consent Screen
- */
-router.get('/google', (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5000/api/auth/google/callback';
-
-  if (!clientId) {
-    return res.status(500).json({ message: 'Google OAuth is not configured on the server.' });
+// Legacy check-username endpoint (preserved for backwards test compatibility)
+router.post('/check-username', async (req, res) => {
+  const { username } = req.body;
+  const val = validateUsername(username);
+  if (!val.valid) {
+    return res.status(400).json({ available: false, message: val.message });
   }
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'openid email profile',
-    access_type: 'offline',
-    prompt: 'select_account'
-  });
-
-  return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
-});
-
-/**
- * GET /api/auth/google/callback
- * Handles Google OAuth callback, exchanges authorization code for token, and authenticates user.
- */
-router.get('/google/callback', async (req, res) => {
-  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-  const { code, error, error_description } = req.query;
-
-  if (error || !code) {
-    const msg = encodeURIComponent(error_description || error || 'Google sign-in was cancelled.');
-    return res.redirect(`${clientUrl}/login?error=${msg}`);
-  }
-
   try {
-    // 1. Exchange authorization code for tokens
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5000/api/auth/google/callback',
-        grant_type: 'authorization_code'
-      })
-    });
-
-    const tokenData = await tokenResponse.json();
-    if (!tokenResponse.ok || !tokenData.access_token) {
-      console.error('Google token exchange failed:', tokenData);
-      const msg = encodeURIComponent(tokenData.error_description || 'Failed to exchange Google authorization code.');
-      return res.redirect(`${clientUrl}/login?error=${msg}`);
-    }
-
-    // 2. Fetch Google user profile
-    const userResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` }
-    });
-
-    const googleUser = await userResponse.json();
-    if (!userResponse.ok || !googleUser.email) {
-      console.error('Google user info failed:', googleUser);
-      const msg = encodeURIComponent('Failed to retrieve user profile from Google.');
-      return res.redirect(`${clientUrl}/login?error=${msg}`);
-    }
-
-    const email = googleUser.email.trim().toLowerCase();
-    const name = googleUser.name || googleUser.given_name || email.split('@')[0];
-    const avatarUrl = googleUser.picture || null;
-
-    // 3. Find or create user in database
-    let userId;
-    const [existing] = await db.execute(
-      'SELECT id, name, email, avatar_url FROM users WHERE email = ? LIMIT 1',
-      [email]
+    const [rows] = await db.execute(
+      'SELECT id FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
+      [val.username]
     );
-
-    if (existing.length > 0) {
-      userId = existing[0].id;
-      if (!existing[0].avatar_url && avatarUrl) {
-        await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, userId]);
-      }
-    } else {
-      const [insertResult] = await db.execute(
-        'INSERT INTO users (name, email, password_hash, auth_provider, avatar_url) VALUES (?, ?, NULL, "google", ?)',
-        [name, email, avatarUrl]
-      );
-      userId = insertResult.insertId;
+    if (rows.length > 0) {
+      return res.status(200).json({ available: false, message: 'This username is already taken.' });
     }
-
-    // 4. Issue Rise JWT
-    const token = jwt.sign(
-      { id: userId, email, name, avatarUrl },
-      process.env.JWT_SECRET || 'rise_jwt_secret',
-      { expiresIn: '7d' }
-    );
-
-    const redirectParams = new URLSearchParams({
-      token,
-      name,
-      email,
-      avatar: avatarUrl || '',
-    });
-
-    return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
+    return res.status(200).json({ available: true, message: 'Username is available.' });
   } catch (err) {
-    console.error('Google callback error:', err);
-    const msg = encodeURIComponent('An error occurred during Google sign-in. Please try again.');
-    return res.redirect(`${clientUrl}/login?error=${msg}`);
-  }
-});
-
-/**
- * GET /api/auth/github
- * Redirects user to GitHub OAuth authorization page
- */
-router.get('/github', (req, res) => {
-  const clientId = process.env.GITHUB_CLIENT_ID;
-  const redirectUri = process.env.GITHUB_CALLBACK_URL || 'http://localhost:5000/api/auth/github/callback';
-
-  if (!clientId) {
-    return res.status(500).json({ message: 'GitHub OAuth is not configured on the server.' });
-  }
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    scope: 'read:user user:email'
-  });
-
-  return res.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
-});
-
-/**
- * GET /api/auth/github/callback
- * Handles GitHub OAuth callback, exchanges authorization code for token, and authenticates user.
- */
-router.get('/github/callback', async (req, res) => {
-  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-  const { code, error, error_description } = req.query;
-
-  if (error || !code) {
-    const msg = encodeURIComponent(error_description || error || 'GitHub sign-in was cancelled.');
-    return res.redirect(`${clientUrl}/login?error=${msg}`);
-  }
-
-  try {
-    // 1. Exchange authorization code for access token
-    const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        client_id: process.env.GITHUB_CLIENT_ID,
-        client_secret: process.env.GITHUB_CLIENT_SECRET,
-        code,
-        redirect_uri: process.env.GITHUB_CALLBACK_URL || 'http://localhost:5000/api/auth/github/callback'
-      })
-    });
-
-    const tokenData = await tokenResponse.json();
-    if (!tokenResponse.ok || !tokenData.access_token) {
-      console.error('GitHub token exchange failed:', tokenData);
-      const msg = encodeURIComponent(tokenData.error_description || 'Failed to exchange GitHub authorization code.');
-      return res.redirect(`${clientUrl}/login?error=${msg}`);
-    }
-
-    // 2. Fetch GitHub user profile
-    const userResponse = await fetch('https://api.github.com/user', {
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-        'User-Agent': 'Rise-App'
-      }
-    });
-
-    const githubUser = await userResponse.json();
-    if (!userResponse.ok || !githubUser.id) {
-      console.error('GitHub user profile failed:', githubUser);
-      const msg = encodeURIComponent('Failed to retrieve user profile from GitHub.');
-      return res.redirect(`${clientUrl}/login?error=${msg}`);
-    }
-
-    // 3. Extract email (fetch /user/emails if primary email is private)
-    let email = githubUser.email;
-    if (!email) {
-      try {
-        const emailsResponse = await fetch('https://api.github.com/user/emails', {
-          headers: {
-            Authorization: `Bearer ${tokenData.access_token}`,
-            'User-Agent': 'Rise-App'
-          }
-        });
-        const emails = await emailsResponse.json();
-        if (Array.isArray(emails)) {
-          const primary = emails.find((e) => e.primary && e.verified) || emails.find((e) => e.verified) || emails[0];
-          if (primary) email = primary.email;
-        }
-      } catch (err) {
-        console.warn('Could not fetch secondary GitHub emails:', err);
-      }
-    }
-
-    if (!email) {
-      email = `${githubUser.login}@users.noreply.github.com`;
-    }
-
-    email = email.trim().toLowerCase();
-    const name = githubUser.name || githubUser.login || 'GitHub User';
-    const avatarUrl = githubUser.avatar_url || null;
-
-    // 4. Find or create user in database
-    let userId;
-    const [existing] = await db.execute(
-      'SELECT id, name, email, avatar_url FROM users WHERE email = ? LIMIT 1',
-      [email]
-    );
-
-    if (existing.length > 0) {
-      userId = existing[0].id;
-      if (!existing[0].avatar_url && avatarUrl) {
-        await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, userId]);
-      }
-    } else {
-      const [insertResult] = await db.execute(
-        'INSERT INTO users (name, email, password_hash, auth_provider, avatar_url) VALUES (?, ?, NULL, "github", ?)',
-        [name, email, avatarUrl]
-      );
-      userId = insertResult.insertId;
-    }
-
-    // 5. Issue Rise JWT
-    const token = jwt.sign(
-      { id: userId, email, name, avatarUrl },
-      process.env.JWT_SECRET || 'rise_jwt_secret',
-      { expiresIn: '7d' }
-    );
-
-    const redirectParams = new URLSearchParams({
-      token,
-      name,
-      email,
-      avatar: avatarUrl || '',
-    });
-
-    return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
-  } catch (err) {
-    console.error('GitHub callback error:', err);
-    const msg = encodeURIComponent('An error occurred during GitHub sign-in. Please try again.');
-    return res.redirect(`${clientUrl}/login?error=${msg}`);
+    return res.status(500).json({ available: false, message: 'Error checking username.' });
   }
 });
 

@@ -1,6 +1,8 @@
 import { FaXTwitter, FaYoutube, FaLinkedinIn, FaGithub, FaInstagram } from 'react-icons/fa6';
 import '../styles/Sections.css';
 
+const CURRENT_YEAR = new Date().getFullYear();
+
 const COLS = [
   {
     title: 'Product',
@@ -73,7 +75,7 @@ export default function Footer() {
 
         <div className="footer__bottom">
           <p className="footer__copy">
-            © {new Date().getFullYear()} Rise Technologies, Inc. All rights reserved.
+            © {CURRENT_YEAR} Rise Technologies, Inc. All rights reserved.
           </p>
           <nav className="footer__legal" aria-label="Legal links">
             <a href="#">Privacy</a>

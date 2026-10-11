@@ -4,7 +4,7 @@ Rise is a modern IT learning platform designed for structured courses, interacti
 
 ## Tech Stack
 - **Frontend**: React (Vite), Axios, React Router DOM
-- **Backend**: Node.js, Express, MySQL2 (Promise Pool), JWT, Bcryptjs
+- **Backend**: Node.js, Express, MySQL2 (Promise Pool), JWT, Nodemailer, Google OAuth (Passwordless Email OTP)
 - **Database**: MySQL 8.0+
 
 ## Project Structure

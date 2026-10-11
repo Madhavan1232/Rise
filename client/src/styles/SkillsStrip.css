@@ -6,7 +6,9 @@
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  padding: 32px 0;
+  padding: 36px 0 40px;
+  overflow: hidden;
+  position: relative;
 }
 
 .skills-strip__label {
@@ -17,6 +19,14 @@
   text-transform: uppercase;
   color: var(--text-secondary);
   margin-bottom: 24px;
+}
+
+.skills-strip__loops {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  overflow: hidden;
 }
 
 .skills-strip__row {
@@ -38,6 +48,7 @@
   color: var(--text-secondary);
   background: var(--bg-primary);
   cursor: default;
+  white-space: nowrap;
   transition: color var(--duration-base), border-color var(--duration-base),
               background var(--duration-base), box-shadow var(--duration-base),
               transform var(--duration-fast);
@@ -46,9 +57,9 @@
 
 .skill-pill:hover {
   color: var(--text-primary);
-  border-color: var(--blue-500);
-  background: var(--blue-50);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08);
+  border-color: #cbd5e1;
+  background: var(--bg-primary);
+  box-shadow: 0 4px 14px rgba(11, 27, 58, 0.08);
   transform: translateY(-2px);
 }
 
@@ -58,11 +69,11 @@
   justify-content: center;
   font-size: 18px;
   line-height: 1;
-  color: #64748b;
-  transition: color var(--duration-base), transform var(--duration-fast);
+  color: var(--brand-color, inherit);
+  transition: transform var(--duration-fast);
 }
 
 .skill-pill:hover .skill-pill__icon {
-  color: var(--brand-color, var(--blue-500));
-  transform: scale(1.15);
+  color: var(--brand-color, inherit);
+  transform: scale(1.18);
 }

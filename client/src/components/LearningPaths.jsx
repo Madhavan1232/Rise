@@ -39,7 +39,7 @@ export default function LearningPaths() {
   const [ref, visible] = useScrollReveal();
 
   return (
-    <section className="learning-paths" aria-labelledby="paths-title">
+    <section id="learning-paths" className="learning-paths" aria-labelledby="paths-title">
       <div className="section-inner">
         <header className="learning-paths__header" ref={ref}>
           <motion.p

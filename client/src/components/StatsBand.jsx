@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
 import { Star } from '@phosphor-icons/react';
 import { useScrollReveal } from '../hooks/useScrollReveal';
 import '../styles/Sections.css';

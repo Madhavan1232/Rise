@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion } from 'framer-motion';
 
 function Avatar({ user, large = false }) {
   const [imgError, setImgError] = useState(false);

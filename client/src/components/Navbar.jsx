@@ -20,7 +20,7 @@ import DescriptionOutlined from '@mui/icons-material/DescriptionOutlined';
 import HelpOutlineOutlined from '@mui/icons-material/HelpOutlineOutlined';
 import KeyboardArrowDownOutlined from '@mui/icons-material/KeyboardArrowDownOutlined';
 import SearchOutlined from '@mui/icons-material/SearchOutlined';
-import { MetalButton } from '@/components/ui/metal-button';
+import { Button } from '@/components/ui/button';
 import { AUDIENCE_TABS, NAV_ITEMS } from '../data/navData';
 import { useAuth } from '../context/AuthContext';
 import UserButton from './UserButton';
@@ -165,18 +165,8 @@ export default function Navbar() {
   const [openMenu, setOpenMenu] = useState(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [reducedMotion, setReducedMotion] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-
-  useEffect(() => {
-    const mql = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const handler = (e) => setReducedMotion(e.matches);
-    mql.addEventListener('change', handler);
-    return () => mql.removeEventListener('change', handler);
-  }, []);
 
   useEffect(() => {
     const fn = () => setScrolled(window.scrollY > 8);
@@ -293,31 +283,21 @@ export default function Navbar() {
                   onSettings={() => navigate('/settings')}
                 />
               ) : (
-                <div className="flex items-center gap-3">
-                  <MetalButton
-                    variant="default"
-                    type="button"
-                    preset="silver"
-                    disableGlow
-                    paused={reducedMotion}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
                     onClick={() => navigate('/login')}
-                    metalFxClassName="rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
-                    className="font-medium text-sm px-4 min-w-[78px] h-9 rounded-lg text-[#09090b]! cursor-pointer justify-center"
+                    className="font-semibold text-sm text-[#0b1b3a] hover:bg-slate-100/90 hover:text-blue-600 px-4 h-9 rounded-lg transition-colors"
                   >
                     Log in
-                  </MetalButton>
-                  <MetalButton
+                  </Button>
+                  <Button
                     variant="default"
-                    type="button"
-                    preset="silver"
-                    disableGlow
-                    paused={reducedMotion}
                     onClick={() => navigate('/signup')}
-                    metalFxClassName="rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
-                    className="font-semibold text-sm px-4.5 min-w-[86px] h-9 rounded-lg text-[#09090b]! cursor-pointer justify-center"
+                    className="font-semibold text-sm bg-blue-600 hover:bg-blue-700 text-white px-5 h-9 rounded-lg shadow-sm shadow-blue-600/25 hover:shadow-md hover:shadow-blue-600/30 transition-all"
                   >
                     Sign up
-                  </MetalButton>
+                  </Button>
                 </div>
               )}
             </div>
@@ -351,31 +331,21 @@ export default function Navbar() {
                 Log out ({user.name})
               </button>
             ) : (
-              <div className="flex flex-col gap-3 w-full">
-                <MetalButton
-                  variant="default"
-                  type="button"
-                  preset="silver"
-                  disableGlow
-                  paused={reducedMotion}
+              <div className="flex flex-col gap-2.5 w-full">
+                <Button
+                  variant="outline"
                   onClick={() => { navigate('/login'); setMobileOpen(false); }}
-                  metalFxClassName="w-full rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
-                  className="w-full justify-center font-medium text-sm h-10 rounded-lg text-[#09090b]! cursor-pointer"
+                  className="w-full justify-center font-medium text-sm h-10 border-slate-200 text-[#0b1b3a]"
                 >
                   Log in
-                </MetalButton>
-                <MetalButton
+                </Button>
+                <Button
                   variant="default"
-                  type="button"
-                  preset="silver"
-                  disableGlow
-                  paused={reducedMotion}
                   onClick={() => { navigate('/signup'); setMobileOpen(false); }}
-                  metalFxClassName="w-full rounded-lg shadow-xs bg-white! text-[#09090b]! hover:bg-slate-50! before:ring-1! before:ring-black!"
-                  className="w-full justify-center font-semibold text-sm h-10 rounded-lg text-[#09090b]! cursor-pointer"
+                  className="w-full justify-center font-semibold text-sm h-10 bg-blue-600 hover:bg-blue-700 text-white"
                 >
                   Sign up
-                </MetalButton>
+                </Button>
               </div>
             )}
           </div>
