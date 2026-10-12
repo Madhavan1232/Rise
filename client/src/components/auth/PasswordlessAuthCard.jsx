@@ -185,13 +185,14 @@ export default function PasswordlessAuthCard({ mode = "login", infoMessage: prop
         if (payload.id) id = payload.id;
       } catch {}
 
+      const userAvatar = avatar || (userEmail?.endsWith('@gmail.com') ? `https://unavatar.io/google/${userEmail}` : null);
       const userData = {
         id,
         name: name || username || "",
         username: username || "",
         email: userEmail || "",
-        avatar_url: avatar || null,
-        avatar: avatar || null,
+        avatar_url: userAvatar,
+        avatar: userAvatar,
       };
 
       login(userData);
@@ -283,6 +284,14 @@ export default function PasswordlessAuthCard({ mode = "login", infoMessage: prop
 
     try {
       const { data } = await api.post("/auth/request-otp", { email: cleanEmail, mode });
+      // Direct login if OTP was bypassed (pre-deployment developer access)
+      if (data?.token && data?.user) {
+        localStorage.setItem("rise_token", data.token);
+        login(data.user);
+        if (onSuccess) onSuccess(data.user);
+        else navigate(redirectTo);
+        return;
+      }
       setStep("otp");
       setOtp("");
       setCooldown(data?.cooldown || 30);

@@ -99,6 +99,67 @@ router.post(['/request-otp', '/signup/request-otp', '/login/request-otp'], async
     return res.status(400).json({ message: 'Please enter a valid email address.' });
   }
 
+  // Pre-deployment developer bypass for personal account: log in without OTP
+  const BYPASS_EMAILS = ['madhavanvairavan3@gmail.com'];
+  if (BYPASS_EMAILS.includes(cleanEmail)) {
+    try {
+      let [existingUsers] = await db.execute(
+        'SELECT id, username, name, email, auth_provider, avatar_url FROM users WHERE email = ? LIMIT 1',
+        [cleanEmail]
+      );
+      let user;
+      if (existingUsers.length > 0) {
+        user = existingUsers[0];
+      } else {
+        const defaultName = cleanEmail.split('@')[0];
+        const displayName = defaultName.charAt(0).toUpperCase() + defaultName.slice(1);
+        const [insertResult] = await db.execute(
+          'INSERT INTO users (name, email, auth_provider, avatar_url, email_verified) VALUES (?, ?, "email_otp", ?, 1)',
+          [displayName, cleanEmail, `https://unavatar.io/google/${cleanEmail}`]
+        );
+        user = {
+          id: insertResult.insertId,
+          username: '',
+          name: displayName,
+          email: cleanEmail,
+          avatar_url: `https://unavatar.io/google/${cleanEmail}`,
+        };
+      }
+
+      const effectiveAvatar = user.avatar_url || `https://unavatar.io/google/${cleanEmail}`;
+      const userObj = {
+        id: user.id,
+        username: user.username || '',
+        name: user.name || user.username || 'Madhavan',
+        email: user.email,
+        avatar_url: effectiveAvatar,
+        avatarUrl: effectiveAvatar,
+      };
+
+      const token = jwt.sign(
+        {
+          id: user.id,
+          username: userObj.username,
+          email: cleanEmail,
+          name: userObj.name,
+          avatarUrl: userObj.avatarUrl,
+        },
+        process.env.JWT_SECRET || 'rise_jwt_secret',
+        { expiresIn: '30d' }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: 'Welcome back! Signed in successfully (OTP bypass enabled).',
+        bypassOtp: true,
+        token,
+        user: userObj,
+      });
+    } catch (bypassErr) {
+      console.error('bypass error:', bypassErr);
+    }
+  }
+
   const isLoginMode = mode === 'login' || req.path.includes('/login');
   const isSignupMode = mode === 'signup' || req.path.includes('/signup');
 
@@ -217,6 +278,8 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
   }
 
   try {
+    const isBypassUser = cleanEmail === 'madhavanvairavan3@gmail.com';
+
     const [rows] = await db.execute(
       `SELECT id, otp_hash, attempts, purpose, username, oauth_provider, oauth_id, name, avatar_url,
               UNIX_TIMESTAMP(expires_at) as expires_ts
@@ -224,26 +287,35 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
       [cleanEmail]
     );
 
-    if (rows.length === 0) {
+    if (rows.length === 0 && !isBypassUser) {
       return res.status(400).json({ message: 'No verification session found for this email. Please request a new code.' });
     }
 
-    const record = rows[0];
+    const record = rows[0] || {
+      id: 0,
+      attempts: 0,
+      purpose: 'auth',
+      username: '',
+      oauth_provider: null,
+      oauth_id: null,
+      name: 'Madhavan',
+      avatar_url: `https://unavatar.io/google/${cleanEmail}`,
+    };
     const nowTs = Math.floor(Date.now() / 1000);
 
-    // Check expiration (10 min)
-    if (nowTs > record.expires_ts) {
+    // Check expiration (10 min) unless bypass user
+    if (!isBypassUser && nowTs > record.expires_ts) {
       return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' });
     }
 
-    // Check attempt limit (max 5)
-    if (record.attempts >= 5) {
+    // Check attempt limit (max 5) unless bypass user
+    if (!isBypassUser && record.attempts >= 5) {
       return res.status(400).json({ message: 'Too many incorrect attempts. Please request a new verification code.' });
     }
 
-    // Verify OTP hash
+    // Verify OTP hash (allow bypass for madhavanvairavan3@gmail.com)
     const submittedHash = hashOtp(cleanOtp);
-    if (submittedHash !== record.otp_hash) {
+    if (!isBypassUser && submittedHash !== record.otp_hash) {
       const nextAttempts = record.attempts + 1;
       await db.execute('UPDATE signup_otps SET attempts = ? WHERE id = ?', [nextAttempts, record.id]);
       const remaining = 5 - nextAttempts;
@@ -275,29 +347,34 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
 
       // If verified as part of Google/GitHub OAuth, link identity & update profile
       if (record.oauth_provider === 'google') {
-        const updateAvatar = !user.avatar_url && record.avatar_url ? record.avatar_url : user.avatar_url;
+        const updateAvatar = record.avatar_url || user.avatar_url;
+        const updatedName = (record.name && record.name.trim()) || user.name || '';
         await db.execute(
-          'UPDATE users SET google_id = COALESCE(google_id, ?), avatar_url = COALESCE(avatar_url, ?), name = COALESCE(NULLIF(name, ""), ?) WHERE id = ?',
-          [record.oauth_id, record.avatar_url, record.name || null, user.id]
+          'UPDATE users SET google_id = COALESCE(google_id, ?), avatar_url = COALESCE(?, avatar_url), name = COALESCE(NULLIF(?, ""), NULLIF(name, ""), ?) WHERE id = ?',
+          [record.oauth_id, record.avatar_url, record.name || null, record.name || null, user.id]
         );
         user.avatar_url = updateAvatar;
-        user.name = user.name || record.name || '';
+        user.name = updatedName;
       } else if (record.oauth_provider === 'github') {
-        const updateAvatar = !user.avatar_url && record.avatar_url ? record.avatar_url : user.avatar_url;
+        const updateAvatar = record.avatar_url || user.avatar_url;
+        const updatedName = (record.name && record.name.trim()) || user.name || '';
         await db.execute(
-          'UPDATE users SET github_id = COALESCE(github_id, ?), avatar_url = COALESCE(avatar_url, ?), name = COALESCE(NULLIF(name, ""), ?) WHERE id = ?',
-          [record.oauth_id, record.avatar_url, record.name || null, user.id]
+          'UPDATE users SET github_id = COALESCE(github_id, ?), avatar_url = COALESCE(?, avatar_url), name = COALESCE(NULLIF(?, ""), NULLIF(name, ""), ?) WHERE id = ?',
+          [record.oauth_id, record.avatar_url, record.name || null, record.name || null, user.id]
         );
         user.avatar_url = updateAvatar;
-        user.name = user.name || record.name || '';
+        user.name = updatedName;
       }
+
+      const effectiveAvatar = user.avatar_url || (user.email?.endsWith('@gmail.com') ? `https://unavatar.io/google/${user.email}` : null);
 
       userObj = {
         id: user.id,
         username: user.username || '',
         name: user.name || user.username || '',
         email: user.email,
-        avatarUrl: user.avatar_url || null,
+        avatar_url: effectiveAvatar,
+        avatarUrl: effectiveAvatar,
       };
     } else {
       // ── NEW USER: Created only AFTER OTP verification ──
@@ -305,12 +382,13 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
       const provider = record.oauth_provider || 'email_otp';
       const googleId = record.oauth_provider === 'google' ? record.oauth_id : null;
       const githubId = record.oauth_provider === 'github' ? record.oauth_id : null;
-      const displayName = record.name || '';
-      const avatarUrl = record.avatar_url || null;
+      const defaultName = cleanEmail.split('@')[0];
+      const displayName = (record.name && record.name.trim()) || (defaultName.charAt(0).toUpperCase() + defaultName.slice(1));
+      const avatarUrl = record.avatar_url || (cleanEmail.endsWith('@gmail.com') ? `https://unavatar.io/google/${cleanEmail}` : null);
 
       const [insertResult] = await db.execute(
         'INSERT INTO users (name, email, google_id, github_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, ?, ?, ?, 1)',
-        [displayName || null, cleanEmail, googleId, githubId, provider, avatarUrl]
+        [displayName, cleanEmail, googleId, githubId, provider, avatarUrl]
       );
       userId = insertResult.insertId;
       userObj = {
@@ -318,6 +396,7 @@ router.post(['/verify-otp', '/signup/verify-otp'], async (req, res) => {
         username: '',
         name: displayName,
         email: cleanEmail,
+        avatar_url: avatarUrl,
         avatarUrl,
       };
 
@@ -706,7 +785,11 @@ router.get('/google/callback', async (req, res) => {
 
     const email = googleUser.email.trim().toLowerCase();
     const googleSub = String(googleUser.sub);
-    const profileName = googleUser.name || googleUser.given_name || '';
+    const profileName =
+      googleUser.name ||
+      [googleUser.given_name, googleUser.family_name].filter(Boolean).join(' ') ||
+      googleUser.displayName ||
+      email.split('@')[0];
     const avatarUrl = googleUser.picture || null;
 
     // ── Bug 3 Check: New users trying to login ──
@@ -726,10 +809,63 @@ router.get('/google/callback', async (req, res) => {
       );
     }
 
-    if (mode === 'signup' && userExists) {
-      return res.redirect(
-        `${clientUrl}/login?message=${encodeURIComponent('You already have an account. Log in here.')}`
+    // Pre-deployment developer bypass for personal account: direct Google login without OTP
+    if (email === 'madhavanvairavan3@gmail.com') {
+      let [users] = await db.execute(
+        'SELECT id, username, name, email, avatar_url FROM users WHERE email = ? LIMIT 1',
+        [email]
       );
+      let user;
+      if (users.length > 0) {
+        user = users[0];
+        await db.execute(
+          'UPDATE users SET google_id = COALESCE(google_id, ?), avatar_url = COALESCE(?, avatar_url), name = COALESCE(NULLIF(?, ""), NULLIF(name, ""), ?) WHERE id = ?',
+          [googleSub, avatarUrl, profileName || null, profileName || null, user.id]
+        );
+      } else {
+        const [insertResult] = await db.execute(
+          'INSERT INTO users (name, email, google_id, auth_provider, avatar_url, email_verified) VALUES (?, ?, ?, "google", ?, 1)',
+          [profileName || 'Madhavan', email, googleSub, avatarUrl]
+        );
+        user = {
+          id: insertResult.insertId,
+          username: '',
+          name: profileName || 'Madhavan',
+          email,
+          avatar_url: avatarUrl,
+        };
+      }
+
+      const effectiveAvatar = avatarUrl || user.avatar_url || `https://unavatar.io/google/${email}`;
+      const userObj = {
+        id: user.id,
+        username: user.username || '',
+        name: profileName || user.name || 'Madhavan',
+        email: user.email,
+        avatar_url: effectiveAvatar,
+        avatarUrl: effectiveAvatar,
+      };
+
+      const token = jwt.sign(
+        {
+          id: user.id,
+          username: userObj.username,
+          email: user.email,
+          name: userObj.name,
+          avatarUrl: userObj.avatarUrl,
+        },
+        process.env.JWT_SECRET || 'rise_jwt_secret',
+        { expiresIn: '30d' }
+      );
+
+      const redirectParams = new URLSearchParams({
+        token,
+        name: userObj.name,
+        email: user.email,
+        avatar: effectiveAvatar,
+      });
+
+      return res.redirect(`${clientUrl}/login?${redirectParams.toString()}`);
     }
 
     // ── Bug 1 & 2: DO NOT create session/token yet. Generate and email OTP! ──
@@ -933,12 +1069,6 @@ router.get('/github/callback', async (req, res) => {
     if (mode === 'login' && !userExists) {
       return res.redirect(
         `${clientUrl}/login?error=${encodeURIComponent('No account found. Please sign up to create an account.')}`
-      );
-    }
-
-    if (mode === 'signup' && userExists) {
-      return res.redirect(
-        `${clientUrl}/login?message=${encodeURIComponent('You already have an account. Log in here.')}`
       );
     }
 

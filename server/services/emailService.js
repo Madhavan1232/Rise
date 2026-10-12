@@ -283,7 +283,7 @@ async function sendStreakReminder(to, streakDays, name = '') {
         h1 { font-size: 20px; font-weight: 700; color: #0b1f44; margin: 0 0 10px; text-align: center; }
         p { font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 24px; text-align: center; }
         .btn-wrap { text-align: center; margin-bottom: 24px; }
-        .btn { display: inline-block; background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; }
+        .btn, a.btn, .btn span { display: inline-block; background-color: #2563eb; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; }
         .footer { font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 20px; margin: 0; }
       </style>
     </head>
@@ -296,7 +296,7 @@ async function sendStreakReminder(to, streakDays, name = '') {
         <h1>Don't break your momentum!</h1>
         <p>Great job on building your learning habit${name ? `, ${name}` : ''}. Complete today's lesson or quiz to keep your streak going.</p>
         <div class="btn-wrap">
-          <a href="${process.env.CLIENT_URL || 'http://localhost:5173'}" class="btn" target="_blank">Continue Learning</a>
+          <a href="${process.env.CLIENT_URL || 'http://localhost:5173'}" class="btn" target="_blank" style="display: inline-block; background-color: #2563eb; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px;"><span style="color: #ffffff !important; text-decoration: none;">Continue Learning</span></a>
         </div>
         <p class="footer">© ${new Date().getFullYear()} Rise Technologies, Inc. All rights reserved.</p>
       </div>
@@ -335,7 +335,7 @@ async function sendWelcomeEmail(to, name = '') {
         h1 { font-size: 20px; font-weight: 700; color: #0b1f44; margin: 0 0 10px; text-align: center; }
         p { font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 24px; text-align: center; }
         .btn-wrap { text-align: center; margin-bottom: 24px; }
-        .btn { display: inline-block; background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; }
+        .btn, a.btn, .btn span { display: inline-block; background-color: #2563eb; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; }
         .footer { font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 20px; margin: 0; }
       </style>
     </head>
@@ -345,7 +345,7 @@ async function sendWelcomeEmail(to, name = '') {
         <h1>Welcome to Rise, ${name || 'Learner'}! 🎉</h1>
         <p>Your account has been created. Explore our interactive modules, hands-on coding environments, and start mastering high-demand tech skills today.</p>
         <div class="btn-wrap">
-          <a href="${process.env.CLIENT_URL || 'http://localhost:5173'}" class="btn" target="_blank">Start Learning</a>
+          <a href="${process.env.CLIENT_URL || 'http://localhost:5173'}" class="btn" target="_blank" style="display: inline-block; background-color: #2563eb; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px;"><span style="color: #ffffff !important; text-decoration: none;">Start Learning</span></a>
         </div>
         <p class="footer">© ${new Date().getFullYear()} Rise Technologies, Inc. All rights reserved.</p>
       </div>

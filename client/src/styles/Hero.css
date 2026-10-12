@@ -1,41 +1,55 @@
 /* ============================================================
-   Rise Hero — Modern Coursera-Inspired Blue Banner
+   Rise Hero — Modern Coursera-Inspired Full Blue Banner
    ============================================================ */
 
 .hero {
-  background: var(--bg-primary, #ffffff);
-  padding: 24px 20px 32px;
+  background: #0056D2;
+  color: #ffffff;
   position: relative;
   width: 100%;
+  padding: clamp(36px, 4vw, 48px) 24px clamp(40px, 4.5vw, 52px);
+  overflow: hidden;
 }
 
 .hero__inner {
   max-width: 1200px;
   margin: 0 auto;
+  width: 100%;
+  position: relative;
+  z-index: 2;
 }
 
 .hero__banner {
-  background: #0755D9;
-  background: linear-gradient(145deg, #0755D9 0%, #064ed3 55%, #0546c4 100%);
-  border-radius: 24px;
-  padding: clamp(32px, 5vw, 56px) clamp(24px, 5vw, 56px);
-  color: #ffffff;
+  width: 100%;
   position: relative;
-  overflow: hidden;
-  box-shadow: 0 16px 40px -10px rgba(7, 85, 217, 0.32);
+  color: #ffffff;
 }
 
 /* Subtle ambient sheen */
-.hero__banner::before {
+.hero::before {
   content: '';
   position: absolute;
-  top: -40%;
-  right: -20%;
-  width: 600px;
-  height: 600px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, transparent 65%);
+  top: -20%;
+  right: -10%;
+  width: 650px;
+  height: 650px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 0%, transparent 65%);
   border-radius: 50%;
   pointer-events: none;
+  z-index: 1;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  bottom: -30%;
+  right: 10%;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, transparent 60%);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
 }
 
 /* ── Top Badge ── */
@@ -101,7 +115,7 @@
   justify-content: center;
   gap: 8px;
   background: #ffffff;
-  color: #0755D9;
+  color: #0056D2;
   font-size: 15px;
   font-weight: 600;
   padding: 13px 24px;
@@ -114,7 +128,7 @@
 
 .hero__btn-primary:hover {
   background: #f8fafc;
-  color: #0546c4;
+  color: #0045aa;
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
@@ -201,11 +215,7 @@
 /* ── Responsive Behavior ── */
 @media (max-width: 900px) {
   .hero {
-    padding: 16px 16px 28px;
-  }
-  .hero__banner {
-    border-radius: 20px;
-    padding: 32px 24px;
+    padding: 32px 20px 36px;
   }
   .hero__cards {
     grid-template-columns: 1fr;
@@ -215,11 +225,7 @@
 
 @media (max-width: 600px) {
   .hero {
-    padding: 12px 12px 24px;
-  }
-  .hero__banner {
-    border-radius: 18px;
-    padding: 28px 20px;
+    padding: 24px 16px 28px;
   }
   .hero__cta {
     flex-direction: column;

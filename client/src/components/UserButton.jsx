@@ -1,11 +1,42 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 
+function formatDisplayName(user) {
+  const name = user?.name?.trim();
+  if (name && name.toLowerCase() !== 'user') {
+    return name;
+  }
+  const username = user?.username?.trim();
+  if (username && username.toLowerCase() !== 'user') {
+    return username;
+  }
+  if (user?.email) {
+    const raw = user.email.split('@')[0];
+    const words = raw.split(/[^a-zA-Z]+/).filter(Boolean);
+    if (words.length > 0) {
+      return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    }
+    return raw.charAt(0).toUpperCase() + raw.slice(1);
+  }
+  return 'User';
+}
+
+function getGoogleAvatarUrl(email) {
+  if (!email) return null;
+  const clean = email.trim().toLowerCase();
+  if (clean.endsWith('@gmail.com') || clean.includes('@googlemail.com')) {
+    return `https://unavatar.io/google/${encodeURIComponent(clean)}`;
+  }
+  return null;
+}
+
 function Avatar({ user, large = false }) {
   const [imgError, setImgError] = useState(false);
-  const avatarUrl = user?.avatar_url || user?.avatar || user?.avatarUrl;
-  const initials = user?.name
-    ? user.name
+  const explicitAvatar = user?.avatar_url || user?.avatar || user?.avatarUrl;
+  const avatarUrl = explicitAvatar || getGoogleAvatarUrl(user?.email);
+  const nameToUse = formatDisplayName(user);
+  const initials = nameToUse && nameToUse !== 'User'
+    ? nameToUse
         .split(' ')
         .filter(Boolean)
         .map((n) => n[0])
@@ -23,7 +54,8 @@ function Avatar({ user, large = false }) {
       {showImage ? (
         <img
           src={avatarUrl}
-          alt={user?.name || 'User avatar'}
+          alt={nameToUse}
+          referrerPolicy="no-referrer"
           onError={() => setImgError(true)}
         />
       ) : (
@@ -45,7 +77,7 @@ export default function UserButton({ user, onSignOut, onSettings }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
-  const displayName = user?.name || 'User';
+  const displayName = formatDisplayName(user);
   const displayEmail = user?.email || '';
 
   useEffect(() => {

@@ -1,10 +1,17 @@
 import { motion } from 'framer-motion';
 import { ArrowRight } from '@phosphor-icons/react';
+import { Link } from 'react-router-dom';
 import { useScrollReveal } from '../hooks/useScrollReveal';
+import { useAuth } from '../context/AuthContext';
 import '../styles/Sections.css';
 
 export default function CTABand() {
+  const { user } = useAuth();
   const [ref, visible] = useScrollReveal();
+
+  if (user) {
+    return null;
+  }
 
   return (
     <section className="cta-band" aria-labelledby="cta-title" ref={ref}>
@@ -29,9 +36,9 @@ export default function CTABand() {
             initial={{ opacity: 0, y: 24 }} animate={visible ? { opacity: 1, y: 0 } : {}}
             transition={{ duration: 0.5, delay: 0.2 }}
           >
-            <a href="/signup" className="btn-white" id="cta-band-signup">
+            <Link to="/signup" className="btn-white" id="cta-band-signup">
               Create free account <ArrowRight size={18} weight="bold" />
-            </a>
+            </Link>
           </motion.div>
           <motion.p
             className="cta-band__note"
